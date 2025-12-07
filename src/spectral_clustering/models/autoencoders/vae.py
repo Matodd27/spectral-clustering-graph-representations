@@ -3,29 +3,25 @@ import torch.nn as nn
 import torch
 
 class VAE(BaseAE):
-    def __init__(self, latent_dim, input_dim=784):
+    def __init__(self, latent_dim, input_dim=784, hidden_layer=400):
         super().__init__(latent_dim=latent_dim, input_dim=input_dim)
 
         # encoder
         self.encoder = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(input_dim, 512),
-            nn.LeakyReLU(0.2),
-            nn.Linear(512, 256),
+            nn.Linear(input_dim, hidden_layer),
             nn.LeakyReLU(0.2)
         )
 
         # latent mean and variance
-        self.mean_layer = nn.Linear(256, latent_dim)
-        self.logvar_layer = nn.Linear(256, latent_dim)
+        self.mean_layer = nn.Linear(hidden_layer, latent_dim)
+        self.logvar_layer = nn.Linear(hidden_layer, latent_dim)
 
         # decoder
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 256),
+            nn.Linear(latent_dim, hidden_layer),
             nn.LeakyReLU(0.2),
-            nn.Linear(256, 512),
-            nn.LeakyReLU(0.2),
-            nn.Linear(512, input_dim),
+            nn.Linear(hidden_layer, input_dim),
             nn.Sigmoid()
         )
 
