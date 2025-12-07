@@ -42,9 +42,8 @@ class AETrainer:
             for batch_idx, (x, *_) in enumerate(train_loader):
                 x = x.to(self.device)
                 optimiser.zero_grad()
-                outputs = self.model(x)                 # AE: x_hat; VAE: (x_hat, mu, logvar), etc.
-                loss = self.loss_fn(x, outputs)    # loss_fn decides how to unpack outputs
-
+                outputs = self.model(x)                 
+                loss = self.loss_fn(x, outputs)    
                 loss.backward()
                 optimiser.step()
 
@@ -66,7 +65,6 @@ class AETrainer:
         self.model.to(self.device)
         self.model.eval()
 
-        # Accept either a DataLoader or a Dataset/Tensor
         if isinstance(data, DataLoader):
             loader = data
         else:
@@ -76,15 +74,15 @@ class AETrainer:
 
         for x, *rest in loader:
             x = x.to(self.device)
-            x_flat = x.view(x.size(0), -1)
 
-            out = self.model.encode(x_flat)
+            out = self.model.encode(x)
             if isinstance(out, tuple):
-                z = out[0]    
+                z = out[0]
             else:
                 z = out
 
             latents.append(z.cpu())
+
 
         return np.array(torch.cat(latents, dim=0).cpu())
 

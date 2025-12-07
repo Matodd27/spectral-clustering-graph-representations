@@ -13,10 +13,15 @@ class BaseSpectralClustering():
         from sklearn.cluster import KMeans
         
         L = compute_laplacian(S, kind=self.kind)
-        vals, vecs = eigsh(L, k=self.n_clusters, which='SM', tol=1e-12)
-        self.embedding_ = vecs
-        km = KMeans(self.n_clusters, n_init=20)
-        self.labels_ = km.fit_predict(self.embedding_)
+        
+        evals, evecs = np.linalg.eigh(L)
+        U = evecs[:, :self.n_clusters]
+        
+        U_norm = U / np.maximum(np.linalg.norm(U, axis=1, keepdims=True), 1e-12)
+
+        km = KMeans(n_clusters=self.n_clusters, n_init='auto', random_state=0)
+        self.labels_ = km.fit_predict(U_norm)
+            
         return self
     
     def fit_predict(self, S):
