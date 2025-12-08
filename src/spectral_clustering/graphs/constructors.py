@@ -1,21 +1,27 @@
 import numpy as np
+from scipy.spatial.distance import cdist
 
 def knn_graph(X, k=10, metric='euclidean', symmetrise=True):
-    from scipy.spatial.distance import cdist
-    
     d = cdist(X, X, metric=metric)
-    
     n = d.shape[0]
+    k = min(k, n - 1)         
+
     idx_knn = np.argpartition(d, kth=k, axis=1)[:, :k+1]
+
     mask = np.zeros_like(d, dtype=bool)
     rows = np.arange(n)[:, None]
     mask[rows, idx_knn] = True
+
     if symmetrise:
         mask = np.logical_or(mask, mask.T)
-    d = d * mask
-    np.fill_diagonal(d, 0)
-    
-    return d
+
+    d_knn = np.full_like(d, np.inf)
+    d_knn[mask] = d[mask]
+
+    np.fill_diagonal(d_knn, 0.0)
+
+    return d_knn
+
 
 def fully_connected(X, metric='euclidean'):
     from scipy.spatial.distance import cdist
