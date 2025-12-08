@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.spatial.distance import cdist
+import cvxpy as cp
 
 def knn_graph(X, k=10, metric='euclidean', symmetrise=True):
     d = cdist(X, X, metric=metric)
@@ -33,24 +34,22 @@ def epsilon_graph(X, eps, metric='euclidean'):
     d[d > eps] = 0
     return d
 
-def adaptive_neighbour_graph(X, gamma):
-    import cvxpy as cp
-    
-    def solve_adaptive_neighbour_row(d_i, gamma):
-        K = d_i.shape[0]
+def solve_adaptive_neighbour_row(d_i, gamma):
+    K = d_i.shape[0]
 
-        s = cp.Variable(K)
-        objective = cp.Minimize(d_i @ s + gamma * cp.sum_squares(s))
-        constraints = [
-            s >= 0,
-            cp.sum(s) == 1
-        ]
+    s = cp.Variable(K)
+    objective = cp.Minimize(d_i @ s + gamma * cp.sum_squares(s))
+    constraints = [
+        s >= 0,
+        cp.sum(s) == 1
+    ]
 
-        prob = cp.Problem(objective, constraints)
-        prob.solve(solver=cp.OSQP)
+    prob = cp.Problem(objective, constraints)
+    prob.solve(solver=cp.OSQP)
 
-        return np.array(s.value, dtype=float)
-    
+    return np.array(s.value, dtype=float)
+
+def adaptive_neighbour_graph(X, gamma):    
     N = X.shape[0]
     S = np.zeros((N, N), dtype=float)
     
