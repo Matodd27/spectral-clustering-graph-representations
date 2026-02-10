@@ -13,8 +13,8 @@ def beta_vae_loss(beta: float = 1.0):
         x_hat, mu, logvar = out
         x = x.view(x.size(0), -1)
 
-        recon = nn.functional.binary_cross_entropy(x_hat, x, reduction="sum") / x.size(0)
-        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / x.size(0)
+        recon = nn.functional.binary_cross_entropy(x_hat, x, reduction="sum")
+        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
         return recon + beta * kld
 

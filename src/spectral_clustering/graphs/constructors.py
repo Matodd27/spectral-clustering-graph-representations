@@ -1,27 +1,37 @@
 import numpy as np
 from scipy.spatial.distance import cdist
+from scipy.spatial import KDTree
+from scipy import sparse
 import cvxpy as cp
 
-def knn_graph(X, k=10, metric='euclidean', symmetrise=True):
-    d = cdist(X, X, metric=metric)
-    n = d.shape[0]
-    k = min(k, n - 1)         
+def knn_graph(X, k=10, kernel='gaussian', symmetrise=True):
+    Xtree = KDTree(X)
+    knn_dist, knn_ind = Xtree.query(X, k=k)
+    
+    n = knn_ind.shape[0]
+    k = np.minimum(knn_ind.shape[1],k)
+    knn_ind = knn_ind[:,:k]
+    knn_dist = knn_dist[:,:k]
+    
+    D = knn_dist*knn_dist
+    eps = D[:,k-1]
+    if kernel == 'gaussian':
+        weights = np.exp(-4*D/eps[:,None])
+    
+    #Flatten knn data and weights
+    knn_ind = knn_ind.flatten()
+    weights = weights.flatten()
 
-    idx_knn = np.argpartition(d, kth=k, axis=1)[:, :k+1]
+    #Self indices
+    self_ind = np.ones((n,k))*np.arange(n)[:,None]
+    self_ind = self_ind.flatten()
 
-    mask = np.zeros_like(d, dtype=bool)
-    rows = np.arange(n)[:, None]
-    mask[rows, idx_knn] = True
-
-    if symmetrise:
-        mask = np.logical_or(mask, mask.T)
-
-    d_knn = np.full_like(d, np.inf)
-    d_knn[mask] = d[mask]
-
-    np.fill_diagonal(d_knn, 0.0)
-
-    return d_knn
+    #Construct sparse matrix and convert to Compressed Sparse Row (CSR) format
+    W = sparse.coo_matrix((weights, (self_ind, knn_ind)),shape=(n,n)).tocsr()
+    
+    W.setdiag(0)
+    W.eliminate_zeros()
+    return W
 
 
 def fully_connected(X, metric='euclidean'):
@@ -68,19 +78,5 @@ def adaptive_neighbour_graph(X, gamma):
 
     return S
 
-def compute_laplacian(S, kind='symmetric'):
-    d = S.sum(axis=1)
-    n = S.shape[0]
-    if kind == 'unnormalised':
-        D = np.diag(d)
-        return D - S
-    elif kind == 'symmetric':
-        d_inv_sqrt = 1.0 / np.sqrt(d)
-        D_inv_sqrt = np.diag(d_inv_sqrt)
-        
-        return np.eye(n) - D_inv_sqrt @ S @ D_inv_sqrt
-    elif kind == 'rw':
-        d_inv = 1.0 / d
-        D_inv = np.diag(d_inv)
-        return np.eye(n) - D_inv @ S
-    raise ValueError('Laplacian kind not defined, valid kinds are: unnormalised, symmetric, rw')
+def compute_laplacian(W):
+    pass

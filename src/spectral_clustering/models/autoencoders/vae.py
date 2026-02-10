@@ -1,46 +1,111 @@
-from .base import BaseAE
 import torch.nn as nn
+from torch.nn import functional as f
 import torch
+import numpy as np
+from torch.utils.data import Dataset, DataLoader
 
-class VAE(BaseAE):
-    def __init__(self, latent_dim, input_dim=784, hidden_layer=400):
-        super().__init__(latent_dim=latent_dim, input_dim=input_dim)
-
-        # encoder
-        self.encoder = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(input_dim, hidden_layer),
-            nn.LeakyReLU(0.2)
-        )
-
-        # latent mean and variance
-        self.mean_layer = nn.Linear(hidden_layer, latent_dim)
-        self.logvar_layer = nn.Linear(hidden_layer, latent_dim)
-
-        # decoder
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, hidden_layer),
-            nn.LeakyReLU(0.2),
-            nn.Linear(hidden_layer, input_dim),
-            nn.Sigmoid()
-        )
-
-    def encode(self, x):
-        x = self.encoder(x)
-        mean, logvar = self.mean_layer(x), self.logvar_layer(x)
-        return mean, logvar
+def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1e-3):
+    class InputDataset(Dataset):
+        def __init__(self, data, targets, transform=None):
+            self.data = data
+            self.targets = targets
+            self.transform = transform
+            
+        def __getitem__(self, index):
+            x = self.data[index]
+            y = self.targets[index]
+            
+            if self.transform:
+                x = self.transform
+                
+            return x,y
+        
+        def __len__(self):
+            return len(self.data)
     
-    def reparametrisation(self, mean, logvar):
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return mean + std * eps
-
+    # Structure as defined in Calder (2020) [https://github.com/GraphLearning/]
+    class VAE(nn.Module):
+        def __init__(self, layer_widths):
+            super(VAE, self).__init__()
+            
+            self.lw = layer_widths
+            self.fc1 = nn.Linear(self.lw[0], self.lw[1])
+            self.fc21 = nn.Linear(self.lw[1], self.lw[2])
+            self.fc22 = nn.Linear(self.lw[1], self.lw[2])
+            self.fc3 = nn.Linear(self.lw[2], self.lw[1])
+            self.fc4 = nn.Linear(self.lw[1], self.lw[0])
+            
+        def encode(self, x):
+            h1 = f.relu(self.fc1(x))
+            return self.fc21(h1), self.fc22(h1)
+        
+        def reparameterise(self, mu, logvar):
+            std = torch.exp(0.5*logvar)
+            eps = torch.randn_like(std)
+            return mu + eps*std
+            
+        def decode(self, z):
+            h3 = f.relu(self.fc3(z))
+            return torch.sigmoid(self.fc4(h3))
+        
+        def forward(self, x):
+            mu, logvar = self.encode(x.view(-1, self.lw[0]))
+            z = self.reparameterise(mu, logvar)
+            return self.decode(z), mu, logvar
+        
+    def beta_vae_loss(x_hat, x, mu, logvar, beta=1):
+        BCE = f.binary_cross_entropy(x_hat, x.view(-1, data.shape[1]), reduction='sum')
+        
+        # Kingma and Welling (2014)
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        
+        return BCE + beta*KLD
+        
+    def train(epoch):
+        model.train()
+        train_loss = 0
+        for batch_idx, (data, _) in enumerate(data_loader):
+            data = data.to(device)
+            optimizer.zero_grad()
+            recon_batch, mu, logvar = model(data)
+            loss = beta_vae_loss(recon_batch, data, mu, logvar)
+            loss.backward()
+            train_loss += loss.item()
+            optimizer.step()
+            if batch_idx % log_interval == 0:
+                print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    epoch, batch_idx*len(data), len(data_loader.dataset),
+                    100.*batch_idx / len(data_loader),
+                    loss.item() / len(data)
+                ))         
+            
+        print('Epoch: {} Average loss: {:.4f}'.format(
+            epoch, train_loss / len(data_loader.dataset)
+        ))
+            
+    layer_widths = [data.shape[1]] + layer_widths
+    log_interval = 64
     
-    def decode(self, x):
-        return self.decoder(x)
+    cuda = torch.cuda.is_available()
+    device = torch.device('cuda' if cuda else 'cpu')
+    kwargs = {'num_workers': 1, 'pin_memory': True} if cuda else {}
     
-    def forward(self, x):
-        mean, logvar = self.encode(x)
-        z = self.reparametrisation(mean, logvar)
-        x_hat = self.decode(z)
-        return x_hat, mean, logvar
+    data = data - data.min()
+    data = data/data.max()
+    data = torch.from_numpy(data).float()
+    target = np.zeros((data.shape[0],)).astype(int)
+    target = torch.from_numpy(target).long()
+    dataset = InputDataset(data, target)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, **kwargs)
+    
+    model = VAE(layer_widths).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    
+    for epoch in range(1, epochs+1):
+        train(epoch)
+        
+    with torch.no_grad():
+        mu, logvar = model.encode(data.to(device).view(-1, layer_widths[0]))
+        data_vae = mu.cpu().numpy()
+        
+    return data_vae

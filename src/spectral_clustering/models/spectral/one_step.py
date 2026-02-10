@@ -10,6 +10,7 @@ class OneStepSpectral():
         self.labels_ = None
         self.embedding_ = None
         self.kind = kind
+        self.S = None
         
     def update_F(self, S):
         L = compute_laplacian(S, kind=self.kind)
@@ -40,7 +41,8 @@ class OneStepSpectral():
 
         km = KMeans(n_clusters=self.n_clusters, n_init='auto', random_state=0)
         self.labels_ = km.fit_predict(F_norm)
-            
+        
+        self.S = S
         return self
     
     def fit_predict(self, X, gamma, lambda_):
