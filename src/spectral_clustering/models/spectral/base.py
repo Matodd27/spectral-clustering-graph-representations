@@ -8,7 +8,7 @@ class BaseSpectralClustering():
         self.labels_ = None
         self.kind = kind
 
-    def fit(self, W: np.ndarray, kind='normalised'):
+    def fit(self, W: np.ndarray, kind='normalised', extra_dims=0):
         if kind == 'normalised' or kind == 'rw':
             n = W.shape[1]
             d = W*np.ones(n)
@@ -17,7 +17,7 @@ class BaseSpectralClustering():
             D = sparse.spdiags(d**(-1/2), 0, n, n)
             A = D*W*D
             
-            u,s,vT = sparse.linalg.svds(A, k=self.n_clusters)
+            u,s,vT = sparse.linalg.svds(A, k=self.n_clusters+extra_dims)
             
             evals = 1 - s
             ind = np.argsort(evals)
@@ -36,6 +36,6 @@ class BaseSpectralClustering():
         self.labels_ = kmeans.labels_
         
     
-    def fit_predict(self, W):
-        self.fit(W)
+    def fit_predict(self, W, kind='normalised', extra_dims=0):
+        self.fit(W, extra_dims=extra_dims)
         return self.labels_
