@@ -11,11 +11,11 @@ class BaseSpectralClustering():
     def fit(self, W: np.ndarray, kind='normalised', extra_dims=0):
         if kind == 'normalised' or kind == 'rw':
             n = W.shape[1]
-            d = W*np.ones(n)
+            d = W@np.ones(n)
             
             # L is symmetric and positive definite, hence SVD and EVD equivalent
             D = sparse.spdiags(d**(-1/2), 0, n, n)
-            A = D*W*D
+            A = D@W@D
             
             u,s,vT = sparse.linalg.svds(A, k=self.n_clusters+extra_dims)
             

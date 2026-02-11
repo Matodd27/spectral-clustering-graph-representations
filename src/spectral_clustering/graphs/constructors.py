@@ -2,7 +2,6 @@ import numpy as np
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 from scipy import sparse
-import cvxpy as cp
 
 def knn_graph(X, k=10, kernel='gaussian', symmetrise=True):
     Xtree = KDTree(X)
@@ -31,6 +30,8 @@ def knn_graph(X, k=10, kernel='gaussian', symmetrise=True):
     
     W.setdiag(0)
     W.eliminate_zeros()
+    if symmetrise:
+        return (W + W.transpose())/2
     return W
 
 
@@ -44,39 +45,65 @@ def epsilon_graph(X, eps, metric='euclidean'):
     d[d > eps] = 0
     return d
 
-def solve_adaptive_neighbour_row(d_i, gamma):
-    K = d_i.shape[0]
+def adaptive_neighbour_graph():
+    pass
 
-    s = cp.Variable(K)
-    objective = cp.Minimize(d_i @ s + gamma * cp.sum_squares(s))
-    constraints = [
-        s >= 0,
-        cp.sum(s) == 1
-    ]
+def compute_laplacian(W):
+    pass
 
-    prob = cp.Problem(objective, constraints)
-    prob.solve(solver=cp.OSQP)
+def can_row_weights_from_dists(d_i, k, eps=1e-12):
+    d = np.asarray(d_i, dtype=float)
+    idx = np.argsort(d)
+    d_sorted = d[idx]
 
-    return np.array(s.value, dtype=float)
+    if k + 1 > d_sorted.size:
+        k = max(1, d_sorted.size - 1)
 
-def adaptive_neighbour_graph(X, gamma):    
+    d_k1 = d_sorted[k]
+    d_k = d_sorted[:k]
+
+    gaps = d_k1 - d_k
+    denom = np.sum(gaps) + eps
+    w_k = gaps / denom
+    return idx[:k], w_k
+
+def adaptive_neighbour_graph_can(X, k=10, symmetrise=True):
+    X = np.asarray(X, dtype=float)
     N = X.shape[0]
-    S = np.zeros((N, N), dtype=float)
-    
+
     XX = np.sum(X**2, axis=1, keepdims=True)
     dists = XX + XX.T - 2 * X @ X.T
-    
+    np.fill_diagonal(dists, np.inf)
+
+    rows = []
+    cols = []
+    data = []
+
     for i in range(N):
-        dists[i, i] = np.inf
-
         neigh_idx = np.where(np.isfinite(dists[i]))[0]
-
         d_i = dists[i, neigh_idx]
-        s_i = solve_adaptive_neighbour_row(d_i, gamma)
 
-        S[i, neigh_idx] = s_i
+        local_idx, local_w = can_row_weights_from_dists(d_i, k=k)
+
+        c = neigh_idx[local_idx]    
+        rows.append(np.full(c.shape[0], i, dtype=np.int32))
+        cols.append(c.astype(np.int32))
+        data.append(local_w.astype(float))
+
+    rows = np.concatenate(rows)
+    cols = np.concatenate(cols)
+    data = np.concatenate(data)
+
+    S = sparse.csr_matrix((data, (rows, cols)), shape=(N, N))
+
+    if symmetrise:
+        S = 0.5 * (S + S.T)
+
+        row_sums = np.asarray(S.sum(axis=1)).ravel()
+        row_sums[row_sums == 0] = 1.0
+        S = S.multiply(1.0 / row_sums[:, None])
 
     return S
 
-def compute_laplacian(W):
+def solve_adaptive_neighbour_row():
     pass
