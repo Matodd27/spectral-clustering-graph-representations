@@ -1,4 +1,4 @@
 from .base import BaseSpectralClustering
-from .one_step import OneStepSpectral
+from .pcan import PCAN
 
-__all__ = ["BaseSpectralClustering", 'OneStepSpectral']
+__all__ = ["BaseSpectralClustering", 'PCAN']
