@@ -3,6 +3,12 @@ from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 from scipy import sparse
 
+from dataclasses import dataclass
+from typing import Optional, Tuple, Union
+
+import scipy.sparse as sp
+from scipy.sparse.linalg import LinearOperator, aslinearoperator
+
 def knn_graph(X, k=10, kernel='gaussian', symmetrise=True):
     Xtree = KDTree(X)
     knn_dist, knn_ind = Xtree.query(X, k=k)
@@ -44,12 +50,6 @@ def epsilon_graph(X, eps, metric='euclidean'):
     d = cdist(X, X, metric='euclidean')
     d[d > eps] = 0
     return d
-
-def adaptive_neighbour_graph():
-    pass
-
-def compute_laplacian(W):
-    pass
 
 def can_row_weights_from_dists(d_i, k, eps=1e-12):
     d = np.asarray(d_i, dtype=float)
@@ -105,5 +105,139 @@ def adaptive_neighbour_graph_can(X, k=10, symmetrise=True):
 
     return S
 
-def solve_adaptive_neighbour_row():
-    pass
+def laplacian_sparse(S: sparse.csr_matrix, kind: str = "symmetric") -> sparse.csr_matrix:
+    """
+    Build Laplacian from sparse affinity.
+    """
+    S = S.tocsr()
+    d = np.asarray(S.sum(axis=1)).ravel()
+
+    if kind == "unnormalized":
+        return sparse.diags(d, format="csr") - S
+
+    if kind == "randomwalk":
+        d_inv = 1.0 / np.maximum(d, 1e-12)
+        Dinv = sparse.diags(d_inv, format="csr")
+        I = sparse.identity(S.shape[0], format="csr")
+        return I - Dinv @ S
+
+    if kind == "symmetric":
+        d_inv_sqrt = 1.0 / np.sqrt(np.maximum(d, 1e-12))
+        Dinv2 = sparse.diags(d_inv_sqrt, format="csr")
+        I = sparse.identity(S.shape[0], format="csr")
+        return I - (Dinv2 @ S @ Dinv2)
+
+    raise ValueError(f"Unknown Laplacian kind: {kind}")
+
+def row_normalise_csr(S: sparse.csr_matrix) -> sparse.csr_matrix:
+    row_sums = np.asarray(S.sum(axis=1)).ravel()
+    row_sums[row_sums == 0] = 1.0
+    return S.multiply(1.0 / row_sums[:, None])
+
+@dataclass(frozen=True)
+class BicliqueKR:
+    Kr: Union[LinearOperator, np.ndarray]
+    degree: np.ndarray
+    K_base: sp.csr_matrix
+    delta: np.ndarray
+    rho: float
+
+
+def compute_biclique_kr(
+    X: np.ndarray,
+    k: int = 10,
+    r: int = 2,
+    return_operator: bool = True,
+    symmetrise: bool = True,
+    zero_diagonal: bool = False,
+    include_scale_factor: bool = False,
+    dtype: np.dtype = np.float64,
+    knn_graph_fn=None,
+):
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2D with shape (n, d). Got shape {X.shape}.")
+
+    n, d = X.shape
+    if n < 2:
+        raise ValueError("Need n >= 2 data points.")
+
+    if not isinstance(k, int) or k <= 0:
+        raise ValueError(f"k must be a positive int. Got {k}.")
+
+    if not isinstance(r, int) or r < 2:
+        raise ValueError(f"r must be an int >= 2. Got {r}.")
+
+    if r % 2 != 0:
+        raise ValueError(f"Saito biclique contraction assumes even r. Got r={r}.")
+
+    if knn_graph_fn is None:
+        try:
+            knn_graph_fn = knn_graph
+        except NameError as e:
+            raise NameError(
+                "knn_graph is not defined. Pass knn_graph_fn=... or import knn_graph "
+                "from spectral_clustering.graphs.constructors."
+            ) from e
+
+    # 1) Base sparse Gram/affinity matrix K
+    K = knn_graph_fn(X, k=k, symmetrise=symmetrise)
+    if not sp.isspmatrix_csr(K):
+        K = K.tocsr()
+
+    K = K.astype(dtype, copy=False)
+
+    if zero_diagonal:
+        K.setdiag(0.0)
+        K.eliminate_zeros()
+
+    # 2) Precompute delta and rho from base K
+    ones = np.ones(n, dtype=dtype)
+    delta = np.asarray(K @ ones).ravel()     # delta_i = sum_j K_ij
+    rho = float(delta.sum())                # rho = sum_{i,j} K_ij
+
+    # Constants from the contraction form
+    # K^{(r)}_ij = n^(r-2) * [ K_ij + alpha*(delta_i + delta_j) + beta*rho ]
+    alpha = (r - 2) / (2.0 * n)
+    beta = ((r - 2) ** 2) / (4.0 * (n ** 2))
+
+    scale = (n ** (r - 2)) if include_scale_factor else 1.0
+
+    # 3) Degree of K^{(r)} without forming K^{(r)}:
+    degree = (delta + alpha * (delta * n + rho) + beta * rho * n) * scale
+    degree = degree.astype(dtype, copy=False)
+
+    if return_operator:
+        def _matvec(v: np.ndarray) -> np.ndarray:
+            v = np.asarray(v, dtype=dtype).reshape(-1)
+            if v.shape[0] != n:
+                raise ValueError(f"Vector length {v.shape[0]} does not match n={n}.")
+
+            s1 = float(v.sum())              # 1^T v
+            s2 = float(delta @ v)            # delta^T v
+
+            out = np.asarray(K @ v).ravel()  # sparse matvec
+            # Add rank-2 term: alpha*(delta*s1 + 1*s2)
+            if alpha != 0.0:
+                out = out + alpha * (delta * s1 + s2)
+            # Add rank-1 constant term: beta*rho*1*s1
+            if beta != 0.0 and rho != 0.0:
+                out = out + (beta * rho * s1)
+
+            if scale != 1.0:
+                out = out * scale
+
+            return out.astype(dtype, copy=False)
+
+        Kr = LinearOperator(shape=(n, n), matvec=_matvec, dtype=dtype)
+
+    else:
+        Kr = K.toarray()
+        if alpha != 0.0:
+            Kr += alpha * (delta[:, None] + delta[None, :])
+        if beta != 0.0 and rho != 0.0:
+            Kr += (beta * rho)
+        if scale != 1.0:
+            Kr *= scale
+        Kr = np.asarray(Kr, dtype=dtype)
+
+    return BicliqueKR(Kr=Kr, degree=degree, K_base=K, delta=delta, rho=rho)
