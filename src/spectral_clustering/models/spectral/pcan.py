@@ -6,31 +6,6 @@ from sklearn.neighbors import NearestNeighbors
 from spectral_clustering.graphs.constructors import can_row_weights_from_dists, laplacian_sparse, row_normalise_csr
 
 class PCAN:
-    """
-    Practical PCAN implementation that usually outperforms "fixed-X-neighbours + global gamma":
-
-    - Dynamic neighbour search in combined space [X_scaled, sqrt(lambda)*F]
-    - CAN closed-form row update => k-sparse, stable scaling, no QP
-    - CSR affinity + sparse Laplacian + eigsh
-    - Early stopping on embedding change
-
-    Parameters
-    ----------
-    n_clusters : int
-    k : int
-        number of nonzero neighbours per row
-    candidate_k : int
-        size of candidate set (must be >= k+1)
-    lambda_ : float
-        weight of embedding-distance term in combined geometry
-    kind : {'symmetric','randomwalk','unnormalized'}
-    symmetrise : bool
-    refresh_neighbours_every : int
-        recompute kNN graph in combined space every this many iterations
-    x_scale : {'auto', float}
-        scaling for X in combined space. 'auto' scales by median pairwise distance in a sample.
-    """
-
     def __init__(
         self,
         n_clusters: int,
@@ -69,7 +44,7 @@ class PCAN:
         m = min(sample_size, n)
         idx = rng.choice(n, size=m, replace=False)
         Xs = X[idx]
-        # median norm of differences to a small random subset
+
         jdx = rng.choice(m, size=min(64, m), replace=False)
         diffs = Xs[:, None, :] - Xs[jdx][None, :, :]
         d2 = np.einsum("ijk,ijk->ij", diffs, diffs)
@@ -80,7 +55,6 @@ class PCAN:
         nn = NearestNeighbors(n_neighbors=n_neighbors, metric="euclidean", n_jobs=self.n_jobs)
         nn.fit(Y)
         d, idx = nn.kneighbors(Y, return_distance=True)
-        # drop self at col 0
         return idx[:, 1:], (d[:, 1:] ** 2)
 
     def _build_S_from_candidates(self, cand_idx, cand_d2) -> sparse.csr_matrix:
@@ -88,7 +62,7 @@ class PCAN:
         rows, cols, data = [], [], []
 
         for i in range(N):
-            d_i = cand_d2[i]           # (candidate_k,)
+            d_i = cand_d2[i]           
             local_idx, local_w = can_row_weights_from_dists(d_i, k=self.k)
             chosen = cand_idx[i, local_idx]
 
@@ -124,18 +98,15 @@ class PCAN:
         if self.candidate_k >= N:
             self.candidate_k = N - 1
 
-        # initial embedding (can be random orthonormal-ish or from an initial CAN graph)
         rng = np.random.default_rng(self.random_state)
         F = rng.normal(size=(N, self.n_clusters))
         F /= np.maximum(np.linalg.norm(F, axis=1, keepdims=True), 1e-12)
 
-        # scaling for X in combined space
         if self.x_scale == "auto":
             alpha = self._auto_x_scale(X, rng=rng)
         else:
             alpha = float(self.x_scale)
 
-        # initial neighbours in combined space
         Y = np.hstack([alpha * X, np.sqrt(self.lambda_) * F])
         cand_idx, cand_d2 = self._compute_neighbours(Y, n_neighbors=self.candidate_k + 1)
         S = self._build_S_from_candidates(cand_idx, cand_d2)
@@ -143,7 +114,6 @@ class PCAN:
         for t in range(self.max_iter):
             F_new = self._update_F(S)
 
-            # convergence check (subspace changes can flip signs; use Fro norm diff)
             diff = np.linalg.norm(F_new - F, ord="fro") / np.maximum(np.linalg.norm(F, ord="fro"), 1e-12)
             F = F_new
 

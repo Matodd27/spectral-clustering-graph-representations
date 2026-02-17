@@ -51,12 +51,6 @@ def epsilon_graph(X, eps, metric='euclidean'):
     d[d > eps] = 0
     return d
 
-def adaptive_neighbour_graph():
-    pass
-
-def compute_laplacian(W):
-    pass
-
 def can_row_weights_from_dists(d_i, k, eps=1e-12):
     d = np.asarray(d_i, dtype=float)
     idx = np.argsort(d)
