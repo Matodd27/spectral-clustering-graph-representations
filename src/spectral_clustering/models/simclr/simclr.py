@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet18
 from collections import OrderedDict
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
 
 def get_model(input_channels=1):
     resnet = resnet18(weights=None)
@@ -29,7 +32,12 @@ class SimCLR:
         self.dataloaders = dataloaders
         self.loss_fn = loss_fn
         
-    def train(self, batch_size=128, epochs=100, learning_rate=1e-3, log_interval=64):
+    def train(self, epochs=100):
+        
+        losses_train = []
+        
+        def get_mean_of_list(L):
+            return sum(L) / len(L)
         
         cuda = torch.cuda.is_available()
         device = torch.device('cuda' if cuda else 'cpu')
@@ -38,6 +46,7 @@ class SimCLR:
         self.model.train()
         train_loss = 0
         for epoch in range(epochs):
+            epoch_losses_train = []
             for batch_idx, (imgs, _) in enumerate(self.dataloaders['train']):
                 
                 self.optimiser.zero_grad()
@@ -49,21 +58,23 @@ class SimCLR:
                 y2 = self.model(x2)
                 
                 loss = self.loss_fn(y1, y2)
-                train_loss += loss.cpu().data.item()
+                epoch_losses_train.append(loss.cpu().data.item())
                 
                 loss.backward()
                 
                 self.optimiser.step()
-                    
-                if batch_idx%log_interval == 0:
-                    print('Train Epoch: {} [{}/{} ({:.0f}%]\tLoss: {:.6f}'.format(
-                        epoch, batch_idx*len(imgs[0]), len(self.dataloaders['train'].dataset),
-                        100.*batch_idx / len(self.dataloaders['train']),
-                        loss.item() / len(imgs[0])
-                    ))   
-            print('Epoch: {} Average loss: {:.4f}'.format(
-                epoch, train_loss / len(self.dataloaders['train'].dataset)
-            ))
-            
-            
-        
+
+            losses_train.append(get_mean_of_list(epoch_losses_train))
+
+            # Plot the training losses Graph and save it
+            fig = plt.figure(figsize=(10, 10))
+            sns.set_style('darkgrid')
+            plt.plot(losses_train)
+            plt.legend(['Training Losses'])
+            plt.savefig('losses.png')
+            plt.close()
+
+            # Store model and optimizer files
+            torch.save(self.model.state_dict(), 'results/model.pth')
+            torch.save(self.optimiser.state_dict(), 'results/optimizer.pth')
+            np.savez("results/lossesfile", np.array(losses_train))
