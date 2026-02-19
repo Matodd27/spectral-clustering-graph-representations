@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-def get_model(input_channels=1):
+def get_model(input_channels=1, latent_dim=100):
     resnet = resnet18(weights=None)
     
     # Modify first layer for 1-channel images (MNIST)
@@ -15,9 +15,9 @@ def get_model(input_channels=1):
     
     # Projection Head
     head = nn.Sequential(OrderedDict([
-        ('fc1', nn.Linear(resnet.fc.in_features, 100)),
+        ('fc1', nn.Linear(resnet.fc.in_features, latent_dim)),
         ('added_relu1', nn.ReLU(inplace=True)),
-        ('fc2', nn.Linear(100,50)),
+        ('fc2', nn.Linear(latent_dim, 50)),
         ('added_reul2', nn.ReLU(inplace=True)),
         ('fc3', nn.Linear(50,25))
     ]))
@@ -31,6 +31,40 @@ class SimCLR:
         self.optimiser = optimiser
         self.dataloaders = dataloaders
         self.loss_fn = loss_fn
+        
+    def load_model(self, model_path, remove_top_layers=2):
+        self.model.load_state_dict(torch.load(model_path, map_location='cpu'), strict=False)
+
+        if remove_top_layers > 0:
+            temp = list(self.model.fc.children())
+            if remove_top_layers <= len(temp):
+                self.model.fc = torch.nn.Sequential(*temp[:remove_top_layers])
+                
+    def get_representations(self, mode, device='cpu'):
+
+        self.model.eval()
+
+        res = {
+        'X':torch.FloatTensor(),
+        'Y':torch.LongTensor()
+        }
+
+        with torch.no_grad():
+            for batch in self.dataloaders[mode]:
+
+                x = batch[0].to(device)
+                label = batch[1]
+
+                pred = self.model(x)
+
+                res['X'] = torch.cat((res['X'], pred.cpu()))
+                res['Y'] = torch.cat((res['Y'], label.cpu()))
+
+
+        res['X'] = np.array(res['X'])
+        res['Y'] = np.array(res['Y'])
+
+        return res
         
     def train(self, epochs=100):
         
