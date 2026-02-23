@@ -41,14 +41,21 @@ def knn_graph(X, k=10, kernel='gaussian', symmetrise=True):
     return W
 
 
-def fully_connected(X, metric='euclidean'):
+def fully_connected(X, metric='euclidean', kernel='gaussian'):
     from scipy.spatial.distance import cdist
-    return cdist(X, X, metric=metric)
+    d = cdist(X, X, metric=metric)
+    if kernel == 'gaussian':
+        d = np.exp((-d*d)/np.quantile(d[d>0], 0.2)**2)
+    return d
+    
 
-def epsilon_graph(X, eps, metric='euclidean'):
+
+def epsilon_graph(X, eps, metric='euclidean', kernel='gaussian'):
     from scipy.spatial.distance import cdist
     d = cdist(X, X, metric='euclidean')
     d[d > eps] = 0
+    if kernel == 'gaussian':
+        d = np.exp((-d*d)/np.quantile(d[d>0], 0.2)**2)
     return d
 
 def can_row_weights_from_dists(d_i, k, eps=1e-12):
