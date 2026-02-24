@@ -1,5 +1,6 @@
 from sklearn.metrics import normalized_mutual_info_score, adjusted_rand_score
 import numpy as np
+import matplotlib.pyplot as plt
 
 def clustering_scores(labels_true, labels_pred):
     return {
@@ -33,7 +34,7 @@ def clustering_accuracy(labels_true, labels_pred):
     
     return 100*(1-C[row_ind, col_ind].sum()/len(labels_pred))
 
-def silhoutte_score(W, labels_):
+def silhouette_score(W, labels_):
     labels = np.asarray(labels_, dtype=np.int64)
     n = labels.shape[0]
     if n == 0:
@@ -147,6 +148,64 @@ def silhoutte_score(W, labels_):
     out = {c: float(sum_s[c] / sizes[c]) for c in range(k) if sizes[c] > 0}
     return out
 
+from scipy import stats
 
-# Optional convenience alias with correct spelling
-silhouette_score = silhoutte_score
+methods = ['knn', 'fc', 'adaptive', 'biclique', 'epsilon', 'PCAN']
+labels = ['kNN', 'FC', 'Adaptive', 'Biclique', r'$\epsilon$-graph', 'PCAN']
+
+def bar_comparison(bar1, bar2, methods=methods, labels=labels, filename=None, ylim=(75, 100)):
+    def summarise(df, cols):
+        n = df.shape[0]
+        mean = df[cols].mean()
+        std = df[cols].std(ddof=1)
+        sem = std / np.sqrt(n)
+        tcrit = stats.t.ppf(0.975, df=n-1)
+        ci = tcrit * sem
+        return mean, ci
+
+    base_mean, base_ci = summarise(bar1, methods)
+    extra_mean, extra_ci = summarise(bar2, methods)
+
+    if bar1[methods].max().max() <= 1.2:
+        base_mean *= 100
+        extra_mean *= 100
+        base_ci *= 100
+        extra_ci *= 100
+
+    x = np.arange(len(methods))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
+
+    ax.bar(x - width/2, base_mean, width,
+        yerr=base_ci, capsize=3,
+        label="Base (no extra eigenvectors)",
+        edgecolor="black", linewidth=0.8)
+
+    ax.bar(x + width/2, extra_mean, width,
+        yerr=extra_ci, capsize=3,
+        label="Extra dimensions as hyperparameter",
+        edgecolor="black", linewidth=0.8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Mean accuracy (%)")
+    ax.set_xlabel("Graph-building methodology")
+    ax.set_ylim(ylim)
+
+    ax.grid(axis='y', linestyle='-', linewidth=0.5, alpha=0.25)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    ax.legend(
+        loc='upper center',
+        bbox_to_anchor=(0.5, 1.15),
+        ncol=2,
+        frameon=False
+    )
+
+    plt.tight_layout()
+    plt.savefig(f"charts/{filename}.pdf", bbox_inches="tight")
+    plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
+    plt.show()
