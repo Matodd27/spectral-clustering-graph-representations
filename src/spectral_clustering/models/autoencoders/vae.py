@@ -1,10 +1,12 @@
+from matplotlib import pyplot as plt
+import seaborn as sns
 import torch.nn as nn
 from torch.nn import functional as f
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
-def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1e-3):
+def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1e-3, save_interval=None, save_path=None, epoch_start=0):
     class InputDataset(Dataset):
         def __init__(self, data, targets, transform=None):
             self.data = data
@@ -61,7 +63,7 @@ def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1
         
         return BCE + beta*KLD
         
-    def train(epoch):
+    def train(epoch, losses_train=None):
         model.train()
         train_loss = 0
         for batch_idx, (data, _) in enumerate(data_loader):
@@ -82,6 +84,8 @@ def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1
         print('Epoch: {} Average loss: {:.4f}'.format(
             epoch, train_loss / len(data_loader.dataset)
         ))
+        if losses_train is not None:
+            losses_train.append(train_loss / len(data_loader.dataset))
             
     layer_widths = [data.shape[1]] + layer_widths
     log_interval = 64
@@ -101,8 +105,40 @@ def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1
     model = VAE(layer_widths).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     
-    for epoch in range(1, epochs+1):
-        train(epoch)
+    if (save_interval is not None) and (save_path is not None):
+        
+        import os
+        os.makedirs(save_path, exist_ok=True)
+        
+        if os.path.isfile(f"{save_path}/epoch_{epoch_start}.pt"):
+            model.load_state_dict(torch.load(f"{save_path}/epoch_{epoch_start}.pt"))
+            optimizer.load_state_dict(torch.load(f"{save_path}/optimizer_epoch_{epoch_start}.pt"))
+            
+            temp = np.load(f"{save_path}/lossesfile.npz")
+            losses_train = list(temp['arr_0'])[:epoch_start+1]
+        else:
+            losses_train = []
+            
+        for epoch in range(1, epochs+1):
+            train(epoch+epoch_start, losses_train=losses_train)
+            if epoch % save_interval == 0:
+                torch.save(model.state_dict(), f"{save_path}/epoch_{epoch+epoch_start}.pt")
+                torch.save(optimizer.state_dict(), f"{save_path}/optimizer_epoch_{epoch+epoch_start}.pt")
+                np.savez(f"{save_path}/lossesfile.npz", losses_train)
+                
+                fig = plt.figure()
+                sns.set_style('darkgrid')
+                plt.plot(losses_train)
+                plt.legend(['Training Losses'])
+                plt.xlabel('Epochs')
+                plt.ylabel('Loss')
+                plt.title('VAE Training Losses')
+                plt.savefig(f"{save_path}/losses_plot.pdf", bbox_inches="tight")
+                plt.savefig(f"{save_path}/losses_plot.png", bbox_inches="tight")
+                plt.close()
+    else:
+        for epoch in range(1, epochs+1):
+            train(epoch)
         
     with torch.no_grad():
         mu, logvar = model.encode(data.to(device).view(-1, layer_widths[0]))
