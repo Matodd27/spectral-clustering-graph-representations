@@ -2,6 +2,7 @@ import numpy as np
 from scipy import sparse
 from sklearn.cluster import KMeans
 from scipy.sparse.linalg import LinearOperator
+from spectral_clustering.metrics import clustering_accuracy
 
 class BaseSpectralClustering():
     def __init__(self, n_clusters: int, kind: str='symmetric'):
@@ -53,6 +54,24 @@ class BaseSpectralClustering():
         self.labels_ = kmeans.labels_
         
     
-    def fit_predict(self, W, kind='symmetric', extra_dims=0):
+    def fit_predict(self, W, kind='symmetric', extra_dims=0, labels_true=None):
         self.fit(W, kind=kind, extra_dims=extra_dims)
+        if labels_true is None:
+            return self.labels_
+        
+        e = 10
+        accuracies = np.zeros(shape=(e,))
+        for e in range(e):
+            self.fit(W, kind=kind, extra_dims=e)
+            accuracies[e] = self.evaluate_partial_accuracy(labels_true)
+        self.fit(W, kind=kind, extra_dims=np.argmax(accuracies))
+        print(f'accuracies: {accuracies}, best extra_dims: {np.argmax(accuracies)}')
         return self.labels_
+                  
+    
+    def evaluate_partial_accuracy(self, labels_true):
+        if self.labels_ is None:
+            raise ValueError("Must fit model before evaluating accuracy.")
+        n = len(labels_true)
+        return clustering_accuracy(self.labels_[:n], labels_true)
+        
