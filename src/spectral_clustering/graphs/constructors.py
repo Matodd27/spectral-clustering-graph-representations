@@ -9,37 +9,93 @@ from typing import Optional, Tuple, Union
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, aslinearoperator
 
-def knn_graph(X, k=10, kernel='gaussian', symmetrise=True):
-    Xtree = KDTree(X)
-    knn_dist, knn_ind = Xtree.query(X, k=k)
-    
+import numpy as np
+from scipy import sparse
+from sklearn.neighbors import KDTree
+
+def knn_graph(X, k=10, kernel='gaussian', symmetrise=True, *, hnsw_M=16, hnsw_ef_construction=200, hnsw_ef=50):
+    X = np.asarray(X)
+    n, m = X.shape
+
+    if k < 1:
+        raise ValueError("k must be >= 1")
+
+    if m <= 5:
+        # Exact kNN
+        k += 1
+        Xtree = KDTree(X)
+        knn_dist, knn_ind = Xtree.query(X, k=min(k, n))
+    else:
+        import hnswlib
+
+        X32 = np.ascontiguousarray(X, dtype=np.float32)
+
+        # Build index
+        index = hnswlib.Index(space='l2', dim=m)
+        index.init_index(max_elements=n, ef_construction=hnsw_ef_construction, M=hnsw_M)
+        index.add_items(X32, np.arange(n))
+        index.set_ef(hnsw_ef)
+
+        kq = min(k + 1, n)
+        labels, dists2 = index.knn_query(X32, k=kq)
+
+        # Drop self neighbour if present
+        if kq > 1:
+            row_ids = np.arange(n)[:, None]
+            self_mask = (labels == row_ids)
+
+            if np.all(self_mask[:, 0]):
+                knn_ind = labels[:, 1:kq]
+                knn_dist = np.sqrt(dists2[:, 1:kq])
+            else:
+                knn_ind = np.empty((n, min(k, n-1)), dtype=int)
+                knn_dist = np.empty((n, min(k, n-1)), dtype=float)
+                for i in range(n):
+                    keep = labels[i][labels[i] != i]
+                    keep_d2 = dists2[i][labels[i] != i]
+                    take = min(k, keep.shape[0])
+                    knn_ind[i, :take] = keep[:take]
+                    knn_dist[i, :take] = np.sqrt(keep_d2[:take])
+        else:
+            # n==1 case: no neighbours
+            knn_ind = np.empty((n, 0), dtype=int)
+            knn_dist = np.empty((n, 0), dtype=float)
+
+    # Ensure correct shapes if k > n
+    if knn_ind.ndim == 1:
+        knn_ind = knn_ind[:, None]
+        knn_dist = knn_dist[:, None]
+
     n = knn_ind.shape[0]
-    k = np.minimum(knn_ind.shape[1],k)
-    knn_ind = knn_ind[:,:k]
-    knn_dist = knn_dist[:,:k]
-    
-    D = knn_dist*knn_dist
-    eps = D[:,k-1]
+    k_eff = min(knn_ind.shape[1], k)
+    knn_ind = knn_ind[:, :k_eff]
+    knn_dist = knn_dist[:, :k_eff]
+
+    if k_eff == 0:
+        return sparse.csr_matrix((n, n))
+
+    D = knn_dist * knn_dist 
+    eps = D[:, k_eff - 1].copy()
+    eps = np.maximum(eps, 1e-12)
+
     if kernel == 'gaussian':
-        weights = np.exp(-4*D/eps[:,None])
-    
-    #Flatten knn data and weights
-    knn_ind = knn_ind.flatten()
-    weights = weights.flatten()
+        weights = np.exp(-4.0 * D / eps[:, None])
+    else:
+        raise ValueError(f"Unsupported kernel: {kernel}")
 
-    #Self indices
-    self_ind = np.ones((n,k))*np.arange(n)[:,None]
-    self_ind = self_ind.flatten()
+    knn_ind_f = knn_ind.reshape(-1)
+    weights_f = weights.reshape(-1)
 
-    #Construct sparse matrix and convert to Compressed Sparse Row (CSR) format
-    W = sparse.coo_matrix((weights, (self_ind, knn_ind)),shape=(n,n)).tocsr()
-    
+    self_ind = np.repeat(np.arange(n), k_eff)
+
+    W = sparse.coo_matrix((weights_f, (self_ind, knn_ind_f)), shape=(n, n)).tocsr()
     W.setdiag(0)
     W.eliminate_zeros()
-    if symmetrise:
-        return (W + W.transpose())/2
-    return W
 
+    if symmetrise:
+        W = (W + W.transpose()) * 0.5
+
+    return W
 
 def fully_connected(X, metric='euclidean', kernel='gaussian'):
     from scipy.spatial.distance import cdist
