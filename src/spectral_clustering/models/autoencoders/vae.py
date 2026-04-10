@@ -18,7 +18,7 @@ def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1
             y = self.targets[index]
             
             if self.transform:
-                x = self.transform
+                x = self.transform(x)
                 
             return x,y
         
@@ -56,12 +56,14 @@ def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1
             return self.decode(z), mu, logvar
         
     def beta_vae_loss(x_hat, x, mu, logvar, beta=1):
+        
         BCE = f.binary_cross_entropy(x_hat, x.view(-1, data.shape[1]), reduction='sum')
         
         # Kingma and Welling (2014)
         KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
         
         return BCE + beta*KLD
+    
         
     def train(epoch, losses_train=None):
         model.train()
@@ -70,6 +72,7 @@ def vae(data, layer_widths=[400,20], batch_size=128, epochs=100, learning_rate=1
             data = data.to(device)
             optimizer.zero_grad()
             recon_batch, mu, logvar = model(data)
+            
             loss = beta_vae_loss(recon_batch, data, mu, logvar)
             loss.backward()
             train_loss += loss.item()

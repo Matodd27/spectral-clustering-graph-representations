@@ -59,13 +59,12 @@ class BaseSpectralClustering():
         if labels_true is None:
             return self.labels_
         
-        e = 10
-        accuracies = np.zeros(shape=(e,))
-        for e in range(e):
+        accuracies = np.zeros(shape=(extra_dims+1,))
+        for e in range(extra_dims+1):
             self.fit(W, kind=kind, extra_dims=e)
             accuracies[e] = self.evaluate_partial_accuracy(labels_true)
-        self.fit(W, kind=kind, extra_dims=np.argmax(accuracies))
         print(f'accuracies: {accuracies}, best extra_dims: {np.argmax(accuracies)}')
+        self.fit(W, kind=kind, extra_dims=np.argmax(accuracies))
         return self.labels_
                   
     

@@ -177,6 +177,48 @@ def spectral_consistency_loss(h1, h2, centroids, margin=0.2, centroid_mask=None)
 
     return pos_loss + neg_loss
 
+def encode_dataset(model_path):  
+    model = get_model(input_channels=1).to(device)
+    
+    try:
+        state_dict = torch.load(model_path, map_location=device, weights_only=True)
+    except:
+        state_dict = torch.load(model_path, map_location=device, weights_only=False)['model_state_dict']
+    
+    model.load_state_dict(state_dict)
+    model.eval()
+    latents, labels = [], []
+
+    eval_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,)),
+    ])
+
+    dataset = datasets.FashionMNIST(
+        root="/Users/matthewtodd/Uni work/Year 4/Dissertation/git-repo/spectral-clustering/notebooks/data",
+        train=True,
+        download=False,
+        transform=eval_transform,
+    )
+
+    loader = DataLoader(
+        dataset,
+        batch_size=512,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=torch.cuda.is_available(),
+    )
+
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device, non_blocking=torch.cuda.is_available())
+            h = model.encode(x)
+            latents.append(h.cpu())
+            labels.append(y.cpu())
+
+    latents = torch.cat(latents, dim=0).numpy()
+    labels = torch.cat(labels, dim=0).numpy()
+    return latents, labels
 
 class WarmupCosineScheduler:
     def __init__(self, optimizer, total_epochs, warmup_epochs):

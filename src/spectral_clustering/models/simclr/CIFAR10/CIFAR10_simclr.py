@@ -10,14 +10,24 @@ from torchvision import datasets, transforms
 from torchvision.models import resnet18
 from torchvision.utils import make_grid, save_image
 
+
+DATASET_PATH = os.path.expanduser('~/scratch/data')
+root = os.path.expanduser('~/scratch/simclr_cifar10')
+results_dir = os.path.join(root, 'SimCLR_results')
+os.makedirs(results_dir, exist_ok=True)
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+
 
 batch_size = 512
-num_workers = 8
-num_epochs = 100
-tau = 0.2
+num_workers = 8 
+num_epochs = 500
+tau = 0.5
 warmup_epochs = 10
 losses_train = []
+
 
 class ContrastiveTransformations(object):
     def __init__(self, base_transforms, n_views=2):
@@ -29,34 +39,35 @@ class ContrastiveTransformations(object):
 
 
 contrast_transforms = transforms.Compose([
-    transforms.RandomAffine(
-        degrees=10,
-        translate=(0.08, 0.08),
-        scale=(0.90, 1.05),
-        fill=0,
-    ),
-    transforms.RandomApply(
-        [transforms.ColorJitter(brightness=0.15, contrast=0.15)],
-        p=0.5,
-    ),
+    transforms.RandomResizedCrop(size=32),
+    transforms.RandomHorizontalFlip(p=0.5),
     transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,)),
+    transforms.RandomApply(
+        [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)],
+        p=0.8,
+    ),
+    transforms.RandomGrayscale(p=0.2),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+])
+
+eval_transforms = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
 
 
 class SimCLRNet(nn.Module):
-    def __init__(self, input_channels=1):
+    def __init__(self, input_channels=3):
         super().__init__()
         backbone = resnet18(weights=None)
-        if input_channels == 1:
-            backbone.conv1 = nn.Conv2d(
-                1,
-                64,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-                bias=False,
-            )
+        backbone.conv1 = nn.Conv2d(
+            input_channels,
+            64,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            bias=False,
+        )
         backbone.maxpool = nn.Identity()
         backbone_dim = backbone.fc.in_features
         backbone.fc = nn.Identity()
@@ -71,17 +82,21 @@ class SimCLRNet(nn.Module):
     def encode(self, x):
         return self.backbone(x)
 
-    def forward(self, x):
+    def forward_with_features(self, x):
         h = self.encode(x)
         z = self.projector(h)
+        return h, z
+
+    def forward(self, x):
+        _, z = self.forward_with_features(x)
         return z
 
 
-def get_model(input_channels=1):
+def get_model(input_channels=3):
     return SimCLRNet(input_channels=input_channels)
 
 
-def ntxent_loss(a, b, tau=0.2):
+def ntxent_loss(a, b, tau=0.5):
     z = torch.cat([a, b], dim=0)
     z = F.normalize(z, dim=1)
 
@@ -95,12 +110,12 @@ def ntxent_loss(a, b, tau=0.2):
     return F.cross_entropy(logits, targets)
 
 def encode_dataset(model_path):  
-    model = get_model(input_channels=1).to(device)
+    model = get_model(input_channels=3).to(device)
     
     try:
         state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    except TypeError:
-        state_dict = torch.load(model_path, map_location=device)
+    except:
+        state_dict = torch.load(model_path, map_location=device, weights_only=False)['model_state_dict']
     
     model.load_state_dict(state_dict)
     model.eval()
@@ -108,10 +123,10 @@ def encode_dataset(model_path):
 
     eval_transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,)),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
     ])
 
-    dataset = datasets.FashionMNIST(
+    dataset = datasets.CIFAR10(
         root="/Users/matthewtodd/Uni work/Year 4/Dissertation/git-repo/spectral-clustering/notebooks/data",
         train=True,
         download=False,
@@ -136,7 +151,6 @@ def encode_dataset(model_path):
     latents = torch.cat(latents, dim=0).numpy()
     labels = torch.cat(labels, dim=0).numpy()
     return latents, labels
-
 
 class WarmupCosineScheduler:
     def __init__(self, optimizer, total_epochs, warmup_epochs):
@@ -205,6 +219,7 @@ class SimCLR:
         self.scaler = scaler
         self.results_dir = results_dir
         self.use_amp = torch.cuda.is_available()
+        self.autocast_device = 'cuda' if self.use_amp else 'cpu'
         self.losses_train = []
         self.start_epoch = 0
 
@@ -233,6 +248,8 @@ class SimCLR:
         torch.save(checkpoint, os.path.join(self.results_dir, 'checkpoint_last.pth'))
         if best:
             torch.save(checkpoint, os.path.join(self.results_dir, 'checkpoint_best.pth'))
+        if epoch % 100 == 0:
+            torch.save(checkpoint, os.path.join(self.results_dir, f'checkpoint_{epoch}.pth'))
 
     def load_checkpoint(self):
         checkpoint_path = os.path.join(self.results_dir, 'checkpoint_last.pth')
@@ -244,7 +261,7 @@ class SimCLR:
             map_location=device,
             weights_only=False,
         )
-        
+
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimiser.load_state_dict(checkpoint['optimizer_state_dict'])
         self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
@@ -252,7 +269,7 @@ class SimCLR:
         scaler_state = checkpoint.get('scaler_state_dict')
         if scaler_state is not None and self.use_amp:
             self.scaler.load_state_dict(scaler_state)
-        
+
         self.start_epoch = checkpoint["epoch"] + 1
         self.losses_train = checkpoint.get("losses_train", [])
 
@@ -277,7 +294,7 @@ class SimCLR:
 
                 self.optimiser.zero_grad(set_to_none=True)
 
-                with torch.amp.autocast('cuda', enabled=self.use_amp):
+                with torch.amp.autocast(self.autocast_device, enabled=self.use_amp):
                     z1 = self.model(x1)
                     z2 = self.model(x2)
                     loss = self.loss_fn(z1, z2, tau=tau)
@@ -303,3 +320,64 @@ class SimCLR:
             )
 
         return self.losses_train
+
+
+CIFAR10_contrast = datasets.CIFAR10(
+    root=DATASET_PATH,
+    train=True,
+    download=True,
+    transform=ContrastiveTransformations(contrast_transforms, n_views=2),
+)
+
+train_loader = DataLoader(
+    CIFAR10_contrast,
+    batch_size=batch_size,
+    shuffle=True,
+    drop_last=True,
+    num_workers=1,
+    pin_memory=torch.cuda.is_available(),
+    persistent_workers=num_workers > 0,
+)
+
+
+def main():
+    global losses_train
+
+    save_augmentation_preview(
+        CIFAR10_contrast,
+        os.path.join(results_dir, 'aug_preview.png'),
+    )
+
+    model = get_model().to(device)
+
+    base_lr = 0.3 * batch_size / 256
+    optimizer = optim.SGD(
+        model.parameters(),
+        lr=base_lr,
+        momentum=0.9,
+        weight_decay=1e-4,
+    )
+    scheduler = WarmupCosineScheduler(
+        optimizer,
+        total_epochs=num_epochs,
+        warmup_epochs=warmup_epochs,
+    )
+    scaler = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
+
+    dataloaders = {'train': train_loader}
+
+    simclrobj = SimCLR(
+        model,
+        optimizer,
+        dataloaders,
+        ntxent_loss,
+        scheduler,
+        scaler,
+        results_dir,
+    )
+    print(device)
+    losses_train = simclrobj.train(epochs=num_epochs)
+
+
+if __name__ == '__main__':
+    main()

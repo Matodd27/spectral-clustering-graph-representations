@@ -3,34 +3,34 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.metrics import normalized_mutual_info_score
 
-def clustering_scores(labels_partial, labels_pred):
+def clustering_scores(labels_true, labels_pred):
     return {
-        "ACC": clustering_accuracy(labels_partial, labels_pred),
-        "NMI": normalized_mutual_info_score(labels_partial, labels_pred),
-        "ARI": clustering_accuracy(labels_partial, labels_pred),
+        "ACC": clustering_accuracy(labels_true, labels_pred),
+        "NMI": normalized_mutual_info_score(labels_true, labels_pred),
+        "ARI": clustering_accuracy(labels_true, labels_pred),
     }
 
-def clustering_accuracy(labels_partial, labels_pred):   
+def clustering_accuracy(labels_true, labels_pred):   
     import scipy.optimize as optim
     
     # Map true labels to 0,...,k-1
-    labels_partial_copy = labels_partial.copy()
-    unique_classes = np.unique(labels_partial_copy)
+    labels_true_copy = labels_true.copy()
+    unique_classes = np.unique(labels_true_copy)
     num_classes = len(unique_classes)
     
     ind = []
     for c in unique_classes:
-        ind_c = labels_partial_copy == c
+        ind_c = labels_true_copy == c
         ind.append(ind_c)
         
     for i in range(num_classes):
-        labels_partial_copy[ind[i]] = i
+        labels_true_copy[ind[i]] = i
         
     # Create cost matrix C and find minimum assignment of label permutations
     C = np.zeros((num_classes, num_classes), dtype=float)
     for i in range(num_classes):
         for j in range(num_classes):
-            C[i][j] = np.sum((labels_pred == i) & (labels_partial_copy != j))
+            C[i][j] = np.sum((labels_pred == i) & (labels_true_copy != j))
     row_ind, col_ind = optim.linear_sum_assignment(C)
     
     return 100*(1-C[row_ind, col_ind].sum()/len(labels_pred))
@@ -154,39 +154,67 @@ from scipy import stats
 methods = ['knn', 'fc', 'adaptive', 'biclique', 'epsilon', 'PCAN']
 labels = ['kNN', 'FC', 'Adaptive', 'Biclique', r'$\epsilon$-graph', 'PCAN']
 
-def bar_comparison(bar1, bar2, methods=methods, labels=labels, legend=['No extra dimensions', 'Extra dimensions'], xlabel='Graph-building methodology', filename='results', ylim=(75, 100)):
-    def summarise(df, cols):
-        n = df.shape[0]
-        mean = df[cols].mean()
-        std = df[cols].std(ddof=1)
-        sem = std / np.sqrt(n)
-        tcrit = stats.t.ppf(0.975, df=n-1)
-        ci = tcrit * sem
-        return mean, ci
+def summarise(df, cols):
+    n = df.shape[0]
+    mean = df[cols].mean()
+    std = df[cols].std(ddof=1)
+    sem = std / np.sqrt(n)
+    tcrit = stats.t.ppf(0.975, df=n-1)
+    ci = tcrit * sem
+    return mean, ci
 
-    base_mean, base_ci = summarise(bar1, methods)
-    extra_mean, extra_ci = summarise(bar2, methods)
+def line_comparison(dfs, labels=labels, xlabel='Epochs', ylabel='Mean accuracy (%)', filename='results_line', ylim=(75, 100)):
+    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
+    if not isinstance(dfs, tuple):
+        dfs = (dfs,)
+        labels = (labels,)
+    for df, label in zip(dfs, labels):
+        x = df['Epochs']
+        y = df['Accuracy']
+        ci = df['CI']
+        plt.plot(x, y, label=label)
+        plt.fill_between(x, y-ci, y+ci, alpha=0.2)
 
-    if bar1[methods].max().max() <= 1.2:
-        base_mean *= 100
-        extra_mean *= 100
-        base_ci *= 100
-        extra_ci *= 100
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+
+    ax.grid(axis='y', linestyle='-', linewidth=0.5, alpha=0.25)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    ax.legend(
+        loc='upper center',
+        bbox_to_anchor=(0.5, 1.15),
+        ncol=2,
+        frameon=False
+    )
+
+    plt.tight_layout()
+    plt.savefig(f"charts/{filename}.pdf", bbox_inches="tight")
+    plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
+    plt.show()
+
+def bar_comparison(bars, methods=methods, labels=labels, legend=['No extra dimensions', 'Extra dimensions'], xlabel='Graph-building methodology', filename='results', ylim=(75, 100)):
+    
+    means, cis = [], []
+    for bar in bars:
+        mean, ci = summarise(bar, methods)
+        means.append(mean)
+        cis.append(ci)
 
     x = np.arange(len(methods))
-    width = 0.35
+    width = 0.7
 
     fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
 
-    ax.bar(x - width/2, base_mean, width,
-        yerr=base_ci, capsize=3,
-        label=legend[0],
-        edgecolor="black", linewidth=0.8)
-
-    ax.bar(x + width/2, extra_mean, width,
-        yerr=extra_ci, capsize=3,
-        label=legend[1],
-        edgecolor="black", linewidth=0.8)
+    for i, bar in enumerate(bars):
+        ax.bar(x + (i+0.5)*(width/len(bars)) - width/2, 
+               means[i], width/len(bars),
+                yerr=cis[i], capsize=3,
+                label=legend[i],
+                edgecolor="black", linewidth=0.8)
 
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
@@ -211,13 +239,13 @@ def bar_comparison(bar1, bar2, methods=methods, labels=labels, legend=['No extra
     plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
     plt.show()
     
-def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], params=None, kind='symmetric', extra_dims=0, labels_partial=None, iters=100, num_clusters=10):
+def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], params=None, kind='symmetric', extra_dims=0, labels_true=None, iters=100, num_clusters=10):
     from spectral_clustering.models.spectral import BaseSpectralClustering, PCAN
     from spectral_clustering.graphs.constructors import knn_graph, fully_connected, adaptive_neighbour_graph_can, compute_biclique_kr, epsilon_graph
     
     methods_to_fn = {
         'knn': lambda X: knn_graph(X, k=10),
-        'fc': lambda X: fully_connected(X, symmetrise=True),
+        'fc': lambda X: fully_connected(X),
         'adaptive': lambda X: adaptive_neighbour_graph_can(X, k=10, symmetrise=True),
         'biclique': lambda X: compute_biclique_kr(X, k=10, r=4, symmetrise=True),
         'epsilon': lambda X: epsilon_graph(X, epsilon=0.5, symmetrise=True),
@@ -226,9 +254,9 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
     if not isinstance(X, tuple):
         X = (X,)
     if not isinstance(Y, tuple):
-        Y = (Y,)
-    if not isinstance(labels_partial, tuple):
-        labels_partial = (labels_partial,)
+        Y = (Y,)*len(X)
+    if not isinstance(labels_true, tuple):
+        labels_true = (labels_true,)*len(X)
         
     pcan_flag = False
     results = []
@@ -246,20 +274,21 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
                     if pcan_flag and method == 'pcan':
                         labels = pcan.fit_predict(X[x])
                     else:
-                        labels = spectral.fit_predict(W, labels_true=labels_partial[x])
+                        labels = spectral.fit_predict(W, labels_true=labels_true[x])
                     temp_df.loc[i, method] = clustering_accuracy(Y[x], labels)
-                if extra_dims > 0:
+                if extra_dims != 0:
+                    extra_dims = np.abs(extra_dims)
                     max_acc = np.zeros(shape=(extra_dims,))
                     for ed in range(extra_dims):
                         if method == 'pcan':
                             labels = pcan.fit_predict(X[x])
                         else:
-                            labels = spectral.fit_predict(W, extra_dims=ed, labels_true=labels_partial[x])
+                            labels = spectral.fit_predict(W, extra_dims=ed, labels_true=labels_true[x])
                         max_acc[ed] = clustering_accuracy(Y[x], labels)
                     temp_df.loc[i, method] = max_acc[0]
                     temp_df_extra.loc[i, method] = max_acc.max()
-        if extra_dims > 0:
+        if extra_dims != 0:
             results.append((temp_df, temp_df_extra))
         else:            
-            results.append((temp_df))
+            results.append((temp_df,))
     return results
