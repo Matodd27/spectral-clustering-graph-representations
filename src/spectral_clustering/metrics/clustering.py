@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.metrics import normalized_mutual_info_score
 from sklearn.metrics.cluster import contingency_matrix
+import scipy.sparse as sp
 
 plt.rcParams.update({
     # --- Font ---
@@ -69,12 +70,20 @@ def clustering_scores(labels_true, labels_pred):
         "ARI": clustering_accuracy(labels_true, labels_pred),
     }
     
-def purity(labels_true, labels_pred):
-    contingency_matrix = contingency_matrix(labels_true, labels_pred)
-
-    purity_score = np.sum(np.amax(contingency_matrix, axis=0)) / np.sum(contingency_matrix)
+def calculate_neighbourhood_purity(labels, W, k=10):
+    n = len(labels)
+    purity_scores = np.zeros(n)
     
-    return purity_score
+    for i in range(n):
+        neighbours = sp.find(W[i])[1]
+        if len(neighbours) == 0:
+            purity_scores[i] = 1.0
+        else:
+            neighbour_labels = labels[neighbours]
+            purity_scores[i] = 1/k * np.sum(neighbour_labels == labels[i])
+    
+    return np.sum(purity_scores)/n
+
 
 def clustering_accuracy(labels_true, labels_pred):   
     import scipy.optimize as optim
