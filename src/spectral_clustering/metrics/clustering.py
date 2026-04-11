@@ -2,6 +2,65 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.metrics import normalized_mutual_info_score
+from sklearn.metrics.cluster import contingency_matrix
+
+plt.rcParams.update({
+    # --- Font ---
+    'font.family': 'serif',
+    'font.serif': ['Computer Modern Roman', 'Times New Roman', 'DejaVu Serif'],
+    'mathtext.fontset': 'cm',
+    'axes.unicode_minus': False,
+
+    # --- Font sizes (tuned for dissertation figures) ---
+    'font.size': 10,
+    'axes.labelsize': 11,
+    'axes.titlesize': 11,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'legend.fontsize': 10,
+
+    # --- Figure ---
+    'figure.figsize': (7, 4.2),
+    'figure.dpi': 300,
+    'figure.facecolor': 'white',
+
+    # --- Axes ---
+    'axes.facecolor': 'white',
+    'axes.edgecolor': 'black',
+    'axes.linewidth': 0.8,
+    'axes.grid': False,  # control manually
+
+    # --- Grid (used when enabled) ---
+    'grid.color': '0.85',
+    'grid.linestyle': '-',
+    'grid.linewidth': 0.5,
+
+    # --- Ticks ---
+    'xtick.direction': 'out',
+    'ytick.direction': 'out',
+    'xtick.major.size': 4,
+    'ytick.major.size': 4,
+    'xtick.major.width': 0.8,
+    'ytick.major.width': 0.8,
+
+    # --- Lines ---
+    'lines.linewidth': 1.5,
+
+    # --- Legend ---
+    'legend.frameon': False,
+
+    # --- Savefig ---
+    'savefig.dpi': 300,
+    'savefig.bbox': 'tight',
+    'savefig.facecolor': 'white'
+})
+
+COLORS = {
+    'raw': '#666666',
+    'vae': '#0072B2',
+    'simclr': '#009E73',
+    'simclr_pca': '#D55E00'
+}
 
 def clustering_scores(labels_true, labels_pred):
     return {
@@ -9,6 +68,13 @@ def clustering_scores(labels_true, labels_pred):
         "NMI": normalized_mutual_info_score(labels_true, labels_pred),
         "ARI": clustering_accuracy(labels_true, labels_pred),
     }
+    
+def purity(labels_true, labels_pred):
+    contingency_matrix = contingency_matrix(labels_true, labels_pred)
+
+    purity_score = np.sum(np.amax(contingency_matrix, axis=0)) / np.sum(contingency_matrix)
+    
+    return purity_score
 
 def clustering_accuracy(labels_true, labels_pred):   
     import scipy.optimize as optim
@@ -196,7 +262,7 @@ def line_comparison(dfs, labels=labels, xlabel='Epochs', ylabel='Mean accuracy (
     plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
     plt.show()
 
-def bar_comparison(bars, methods=methods, labels=labels, legend=['No extra dimensions', 'Extra dimensions'], xlabel='Graph-building methodology', filename='results', ylim=(75, 100)):
+def bar_comparison_graphs(bars, methods=methods, labels=labels, legend=['No extra dimensions', 'Extra dimensions'], xlabel='Graph-building methodology', filename='results', ylim=(75, 100)):
     
     means, cis = [], []
     for bar in bars:
@@ -292,3 +358,284 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
         else:            
             results.append((temp_df,))
     return results
+
+def bar_comparison(
+    bars,
+    methods=None,
+    labels=None,
+    legend=None,
+    xlabel='Graph-building methodology',
+    ylabel='Clustering accuracy (%)',
+    filename='results',
+    ylim=(0, 100),
+    chance_level=None,
+    use_serif=True
+):
+
+    if use_serif:
+        plt.rcParams.update({
+            'font.family': 'serif',
+            'mathtext.fontset': 'cm',
+            'axes.unicode_minus': False
+        })
+
+    means, cis = [], []
+    for bar in bars:
+        mean, ci = summarise(bar, methods)
+        means.append(mean)
+        cis.append(ci)
+
+    x = np.arange(len(methods))
+    width = 0.7
+
+    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    for i, bar in enumerate(bars):
+        ax.bar(
+            x + (i + 0.5) * (width / len(bars)) - width / 2,
+            means[i],
+            width / len(bars),
+            yerr=cis[i],
+            capsize=3,
+            label=legend[i] if legend is not None else None,
+            color=[COLORS[m] for m in methods] if len(bars) == 1 else COLORS[methods[i]],
+            edgecolor='black',
+            linewidth=0.8,
+            error_kw={'elinewidth': 0.9, 'capthick': 0.9}
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels if labels is not None else methods, fontsize=10)
+    ax.set_ylabel(ylabel, fontsize=11)
+    ax.set_xlabel(xlabel, fontsize=11)
+    ax.set_ylim(ylim)
+
+    if chance_level is not None:
+        ax.axhline(
+            chance_level,
+            color='0.35',
+            linestyle='--',
+            linewidth=1.0,
+            alpha=0.9
+        )
+
+    ax.grid(axis='y', linestyle='-', linewidth=0.5, color='0.85', alpha=1.0)
+    ax.set_axisbelow(True)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.8)
+    ax.spines['bottom'].set_linewidth(0.8)
+
+    ax.tick_params(axis='both', which='major', labelsize=10, width=0.8, length=4)
+
+    if legend is not None:
+        ax.legend(
+            loc='upper center',
+            bbox_to_anchor=(0.5, 1.16),
+            ncol=min(2, len(legend)),
+            frameon=False,
+            fontsize=10
+        )
+
+    plt.tight_layout()
+    plt.savefig(f"charts/{filename}.pdf", bbox_inches="tight")
+    plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
+    plt.show()
+    
+def point_comparison(
+    bars,
+    methods=None,
+    labels=None,
+    legend=None,
+    xlabel='Graph-building methodology',
+    ylabel='Clustering accuracy (%)',
+    filename='results',
+    ylim=(0, 100),
+    chance_level=None
+):
+
+    means, cis = [], []
+    for bar in bars:
+        mean, ci = summarise(bar, methods)
+        means.append(mean)
+        cis.append(ci)
+
+    x = np.arange(len(methods))
+    width = 0.7
+
+    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    if len(bars) == 1:
+        for j, m in enumerate(methods):
+            ax.errorbar(
+                x[j],
+                means[0][m],
+                yerr=cis[0][m],
+                fmt='o',
+                markersize=6,
+                elinewidth=1.0,
+                capsize=3,
+                capthick=1.0,
+                color=COLORS[m],
+                markerfacecolor=COLORS[m],
+                markeredgecolor='black',
+                markeredgewidth=0.8,
+                linestyle='none',
+                zorder=3
+            )
+    else:
+        for i in range(len(bars)):
+            offsets = x + (i + 0.5) * (width / len(bars)) - width / 2
+            ax.errorbar(
+                offsets,
+                means[i],
+                yerr=cis[i],
+                fmt='o',
+                markersize=6,
+                elinewidth=1.0,
+                capsize=3,
+                capthick=1.0,
+                color=COLORS[methods[i]],
+                markerfacecolor=COLORS[methods[i]],
+                markeredgecolor='black',
+                markeredgewidth=0.8,
+                linestyle='none',
+                label=legend[i] if legend is not None else None,
+                zorder=3
+            )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels if labels is not None else methods)
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel(xlabel)
+    ax.set_ylim(ylim)
+
+    if chance_level is not None:
+        ax.axhline(
+            chance_level,
+            color='0.4',
+            linestyle='--',
+            linewidth=1.0,
+            alpha=0.9,
+            zorder=1
+        )
+
+    ax.grid(axis='y', linestyle='-', linewidth=0.5, color='0.85')
+    ax.set_axisbelow(True)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.8)
+    ax.spines['bottom'].set_linewidth(0.8)
+
+    ax.tick_params(axis='both', which='major', width=0.8, length=4)
+
+    if legend is not None and len(bars) > 1:
+        ax.legend(
+            loc='upper center',
+            bbox_to_anchor=(0.5, 1.16),
+            ncol=min(2, len(legend)),
+            frameon=False
+        )
+
+    plt.tight_layout()
+    plt.savefig(f"charts/{filename}.pdf", bbox_inches="tight")
+    plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
+    plt.show()
+    
+def boxplot_with_mean(
+    df,
+    methods,
+    labels=None,
+    xlabel='Representation',
+    ylabel='Clustering accuracy (%)',
+    filename='cifar_knn_boxplot_mean',
+    ylim=(0, 100),
+    chance_level=None,
+    annotate_means=False
+):
+    if labels is None:
+        labels = methods
+
+    data = [df[col].dropna().values for col in methods]
+    means = [np.mean(d) for d in data]
+    positions = np.arange(1, len(methods) + 1)
+
+    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    bp = ax.boxplot(
+        data,
+        positions=positions,
+        widths=0.55,
+        patch_artist=True,
+        showfliers=False,
+        medianprops=dict(color='black', linewidth=1.2),
+        whiskerprops=dict(color='black', linewidth=0.9),
+        capprops=dict(color='black', linewidth=0.9),
+        boxprops=dict(edgecolor='black', linewidth=0.9)
+    )
+
+    colours = [COLORS[m] for m in methods]
+
+    # Fill box colours
+    for patch, c in zip(bp['boxes'], colours):
+        patch.set_facecolor(c)
+        patch.set_alpha(0.75)
+
+    # Overlay mean markers
+    for x, m, c in zip(positions, means, colours):
+        ax.scatter(
+            x, m,
+            s=55,
+            color=c,
+            edgecolor='black',
+            linewidth=0.9,
+            zorder=3
+        )
+
+    if annotate_means:
+        for x, m in zip(positions, means):
+            ax.text(
+                x, m + 1.2,
+                f'{m:.1f}',
+                ha='center',
+                va='bottom',
+                fontsize=9
+            )
+
+    if chance_level is not None:
+        ax.axhline(
+            chance_level,
+            color='0.4',
+            linestyle='--',
+            linewidth=1.0,
+            alpha=0.9,
+            zorder=1
+        )
+
+    ax.set_xticks(positions)
+    ax.set_xticklabels(labels)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(ylim)
+
+    ax.grid(axis='y', linestyle='-', linewidth=0.5, color='0.85')
+    ax.set_axisbelow(True)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.8)
+    ax.spines['bottom'].set_linewidth(0.8)
+    ax.tick_params(axis='both', which='major', width=0.8, length=4)
+
+    plt.tight_layout()
+    plt.savefig(f'charts/{filename}.pdf', bbox_inches='tight')
+    plt.savefig(f'charts/{filename}.png', bbox_inches='tight')
+    plt.show()
