@@ -11,10 +11,10 @@ plt.rcParams.update({
     'mathtext.fontset': 'cm',
     'axes.unicode_minus': False,
 
-    # --- Font sizes (tuned for dissertation figures) ---
+    # --- Font sizes ---
     'font.size': 10,
     'axes.labelsize': 11,
-    'axes.titlesize': 11,
+    'axes.titlesize': 12,   # was 11
     'xtick.labelsize': 10,
     'ytick.labelsize': 10,
     'legend.fontsize': 10,
@@ -28,9 +28,9 @@ plt.rcParams.update({
     'axes.facecolor': 'white',
     'axes.edgecolor': 'black',
     'axes.linewidth': 0.8,
-    'axes.grid': False,  # control manually
+    'axes.grid': False,
 
-    # --- Grid (used when enabled) ---
+    # --- Grid ---
     'grid.color': '0.85',
     'grid.linestyle': '-',
     'grid.linewidth': 0.5,
