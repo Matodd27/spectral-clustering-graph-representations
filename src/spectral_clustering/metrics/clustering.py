@@ -229,39 +229,6 @@ def summarise(df, cols):
     ci = tcrit * sem
     return mean, ci
 
-def line_comparison(dfs, labels=labels, xlabel='Epochs', ylabel='Mean accuracy (%)', filename='results_line', ylim=(75, 100)):
-    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
-    if not isinstance(dfs, tuple):
-        dfs = (dfs,)
-        labels = (labels,)
-    for df, label in zip(dfs, labels):
-        x = df['Epochs']
-        y = df['Accuracy']
-        ci = df['CI']
-        plt.plot(x, y, label=label)
-        plt.fill_between(x, y-ci, y+ci, alpha=0.2)
-
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
-    ax.set_ylim(ylim)
-
-    ax.grid(axis='y', linestyle='-', linewidth=0.5, alpha=0.25)
-    ax.set_axisbelow(True)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-
-    ax.legend(
-        loc='upper center',
-        bbox_to_anchor=(0.5, 1.15),
-        ncol=2,
-        frameon=False
-    )
-
-    plt.tight_layout()
-    plt.savefig(f"charts/{filename}.pdf", bbox_inches="tight")
-    plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
-    plt.show()
-
 def bar_comparison_graphs(bars, methods=methods, labels=labels, legend=['No extra dimensions', 'Extra dimensions'], xlabel='Graph-building methodology', filename='results', ylim=(75, 100)):
     
     means, cis = [], []
@@ -638,4 +605,184 @@ def boxplot_with_mean(
     plt.tight_layout()
     plt.savefig(f'charts/{filename}.pdf', bbox_inches='tight')
     plt.savefig(f'charts/{filename}.png', bbox_inches='tight')
+    plt.show()
+
+def prepare_line_summary(
+    data,
+    x_values=None,
+    x_name='x',
+    ci_level=0.95
+):
+    rows = []
+
+    for series_label, df in data.items():
+        cols = list(df.columns) if x_values is None else list(x_values)
+
+        missing = [c for c in cols if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Series '{series_label}' is missing columns: {missing}"
+            )
+
+        n = df.shape[0]
+        alpha = 1 - ci_level
+        tcrit = stats.t.ppf(1 - alpha / 2, df=n - 1) if n > 1 else np.nan
+
+        for col in cols:
+            values = df[col].dropna().to_numpy()
+
+            n_col = len(values)
+            mean = np.mean(values)
+            sd = np.std(values, ddof=1) if n_col > 1 else np.nan
+            sem = sd / np.sqrt(n_col) if n_col > 1 else np.nan
+            ci = tcrit * sem if n_col > 1 else np.nan
+
+            rows.append({
+                x_name: col,
+                'series': series_label,
+                'mean': mean,
+                'sd': sd,
+                'sem': sem,
+                'ci': ci,
+                'lower': mean - ci if n_col > 1 else np.nan,
+                'upper': mean + ci if n_col > 1 else np.nan,
+                'n': n_col
+            })
+
+    summary_df = pd.DataFrame(rows)
+
+    # Try to convert x to numeric if possible, so epoch plots sort correctly
+    summary_df[x_name] = pd.to_numeric(summary_df[x_name])
+
+    return summary_df
+
+def _pick_colour(label, i, colours=None):
+    if colours is not None and label in colours:
+        return colours[label]
+
+    if label in COLORS:
+        return COLORS[label]
+
+    key = str(label).strip().lower().replace('_', ' ')
+    if 'raw' in key:
+        return COLORS['raw']
+    if 'vae' in key:
+        return COLORS['vae']
+    if 'simclr + pca' in key or 'simclr pca' in key or 'simclr_pca' in key:
+        return COLORS['simclr_pca']
+    if 'simclr' in key:
+        return COLORS['simclr']
+
+
+def line_comparison(
+    summary_df,
+    x='x',
+    y='mean',
+    series='series',
+    lower='lower',
+    upper='upper',
+    xlabel='Epoch',
+    ylabel='Clustering accuracy (%)',
+    filename='line_results',
+    ylim=None,
+    xlim=None,
+    colours=None,
+    ci_style='band',   # 'band', 'bars', or None
+    marker='o',
+    markersize=4.5,
+    linewidth=1.8,
+    reference_line=None,
+    legend=True
+):
+    fig, ax = plt.subplots(figsize=(7, 4.2), dpi=300)
+    fig.patch.set_facecolor('white')
+    ax.set_facecolor('white')
+
+    series_order = list(summary_df[series].drop_duplicates())
+
+    for i, name in enumerate(series_order):
+        sub = summary_df[summary_df[series] == name].sort_values(x)
+        colour = _pick_colour(name, i, colours=colours)
+
+        xvals = sub[x].to_numpy()
+        yvals = sub[y].to_numpy()
+
+        ax.plot(
+            xvals,
+            yvals,
+            color=colour,
+            marker=marker,
+            markersize=markersize,
+            linewidth=linewidth,
+            label=name,
+            zorder=3
+        )
+
+        if ci_style == 'band':
+            ax.fill_between(
+                xvals,
+                sub[lower].to_numpy(),
+                sub[upper].to_numpy(),
+                color=colour,
+                alpha=0.16,
+                linewidth=0,
+                zorder=2
+            )
+        elif ci_style == 'bars':
+            yerr = np.vstack([
+                yvals - sub[lower].to_numpy(),
+                sub[upper].to_numpy() - yvals
+            ])
+            ax.errorbar(
+                xvals,
+                yvals,
+                yerr=yerr,
+                fmt='none',
+                ecolor=colour,
+                elinewidth=0.9,
+                capsize=3,
+                capthick=0.9,
+                zorder=2
+            )
+
+    if reference_line is not None:
+        ax.axhline(
+            reference_line,
+            color='0.35',
+            linestyle='--',
+            linewidth=1.0,
+            alpha=0.9,
+            zorder=1
+        )
+
+    ax.set_xlabel(xlabel, fontsize=11)
+    ax.set_ylabel(ylabel, fontsize=11)
+
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    if xlim is not None:
+        ax.set_xlim(xlim)
+
+    ax.grid(axis='y', linestyle='-', linewidth=0.5, color='0.85')
+    ax.set_axisbelow(True)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.8)
+    ax.spines['bottom'].set_linewidth(0.8)
+
+    ax.tick_params(axis='both', which='major', labelsize=10, width=0.8, length=4)
+
+    if legend:
+        ax.legend(
+            loc='upper center',
+            bbox_to_anchor=(0.5, 1.18),
+            ncol=min(2, len(series_order)),
+            frameon=False,
+            fontsize=10
+        )
+
+    plt.tight_layout()
+    plt.savefig(f"charts/{filename}.pdf", bbox_inches="tight")
+    plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
     plt.show()
