@@ -80,9 +80,19 @@ def calculate_neighbourhood_purity(labels, W, k=10):
             purity_scores[i] = 1.0
         else:
             neighbour_labels = labels[neighbours]
-            purity_scores[i] = 1/k * np.sum(neighbour_labels == labels[i])
+            purity_scores[i] = 1/(len(neighbours)) * np.sum(neighbour_labels == labels[i])
     
-    return np.sum(purity_scores)/n
+    return np.sum(purity_scores)/n, purity_scores
+
+def bootstrap_ci(values, n_boot=1000, seed=0):
+    rng = np.random.default_rng(seed)
+    means = []
+    n = len(values)
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        means.append(values[idx].mean())
+    lo, hi = np.percentile(means, [2.5, 97.5])
+    return np.mean(values), lo, hi
 
 
 def clustering_accuracy(labels_true, labels_pred):   
