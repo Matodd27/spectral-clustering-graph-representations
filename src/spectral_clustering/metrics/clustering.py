@@ -345,21 +345,16 @@ def bar_comparison(
     filename='results',
     ylim=(0, 100),
     chance_level=None,
-    use_serif=True
+    overwrite_cis=None
 ):
-
-    if use_serif:
-        plt.rcParams.update({
-            'font.family': 'serif',
-            'mathtext.fontset': 'cm',
-            'axes.unicode_minus': False
-        })
 
     means, cis = [], []
     for bar in bars:
         mean, ci = summarise(bar, methods)
         means.append(mean)
         cis.append(ci)
+    if overwrite_cis is not None:
+        cis = overwrite_cis
 
     x = np.arange(len(methods))
     width = 0.7
