@@ -292,7 +292,7 @@ def bar_comparison_graphs(bars, methods=methods, labels=labels, legend=['No extr
     plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
     plt.show()
     
-def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], params=None, kind='symmetric', extra_dims=0, labels_true=None, iters=100, num_clusters=(10,)):
+def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], params=None, kind='symmetric', extra_dims=0, labels_true=None, iters=100, num_clusters=10):
     from spectral_clustering.models.spectral import BaseSpectralClustering, PCAN
     from spectral_clustering.graphs.constructors import knn_graph, fully_connected, adaptive_neighbour_graph_can, compute_biclique_kr, epsilon_graph
     
@@ -318,20 +318,22 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
     pcan_flag = False
     results = []
     if 'pcan' in methods:
-        pcan = PCAN(n_clusters=num_clusters, k=10, lambda_=params['lambda'], kind=kind, symmetrise=True)
+        pcan_flag = True
     for x in range(len(X)):
         k = num_clusters[x]
+        if pcan_flag:        
+            pcan = PCAN(n_clusters=k, k=10, lambda_=params['lambda'], kind=kind, symmetrise=True)
+
         spectral = BaseSpectralClustering(n_clusters=k, kind=kind)
         temp_df = pd.DataFrame(columns=methods)
-        temp_df_extra = pd.DataFrame(columns=methods)
-        Ws = [methods_to_fn[m](X[x]) for m in methods]
+        Ws = [methods_to_fn[m](X[x]) for m in methods if m != 'pcan']
         for method_idx, method in enumerate(methods):
             start = time.time()
             for i in range(iters):
-                W = Ws[method_idx]
                 if pcan_flag and method == 'pcan':
                     labels = pcan.fit_predict(X[x])
                 else:
+                    W = Ws[method_idx]
                     labels = spectral.fit_predict(W, labels_true=labels_true[x], extra_dims=extra_dims)
                 temp_df.loc[i, method] = clustering_accuracy(Y[x], labels)    
             timings[x, method_idx] = time.time() - start
