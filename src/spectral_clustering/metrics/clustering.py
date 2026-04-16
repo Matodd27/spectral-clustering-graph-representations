@@ -4,6 +4,7 @@ import pandas as pd
 from sklearn.metrics import normalized_mutual_info_score
 from sklearn.metrics.cluster import contingency_matrix
 import scipy.sparse as sp
+import time
 
 plt.rcParams.update({
     # --- Font ---
@@ -291,7 +292,7 @@ def bar_comparison_graphs(bars, methods=methods, labels=labels, legend=['No extr
     plt.savefig(f"charts/{filename}.png", bbox_inches="tight")
     plt.show()
     
-def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], params=None, kind='symmetric', extra_dims=0, labels_true=None, iters=100, num_clusters=10):
+def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], params=None, kind='symmetric', extra_dims=0, labels_true=None, iters=100, num_clusters=(10,)):
     from spectral_clustering.models.spectral import BaseSpectralClustering, PCAN
     from spectral_clustering.graphs.constructors import knn_graph, fully_connected, adaptive_neighbour_graph_can, compute_biclique_kr, epsilon_graph
     
@@ -299,7 +300,7 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
         'knn': lambda X: knn_graph(X, k=10),
         'fc': lambda X: fully_connected(X),
         'adaptive': lambda X: adaptive_neighbour_graph_can(X, k=10, symmetrise=True),
-        'biclique': lambda X: compute_biclique_kr(X, k=10, r=4, symmetrise=True),
+        'biclique': lambda X: compute_biclique_kr(X, k=10, r=params['r'], symmetrise=True).Kr,
         'epsilon': lambda X: epsilon_graph(X, epsilon=0.5, symmetrise=True),
     }
     
@@ -309,41 +310,33 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
         Y = (Y,)*len(X)
     if not isinstance(labels_true, tuple):
         labels_true = (labels_true,)*len(X)
+    if not isinstance(num_clusters, tuple):
+        num_clusters = (num_clusters,)*len(X)
+        
+    timings = np.zeros(shape=(len(X), len(methods)))
         
     pcan_flag = False
     results = []
-    spectral = BaseSpectralClustering(n_clusters=num_clusters, kind=kind)
     if 'pcan' in methods:
         pcan = PCAN(n_clusters=num_clusters, k=10, lambda_=params['lambda'], kind=kind, symmetrise=True)
     for x in range(len(X)):
+        k = num_clusters[x]
+        spectral = BaseSpectralClustering(n_clusters=k, kind=kind)
         temp_df = pd.DataFrame(columns=methods)
         temp_df_extra = pd.DataFrame(columns=methods)
         Ws = [methods_to_fn[m](X[x]) for m in methods]
-        for i in range(iters):
-            for method_idx, method in enumerate(methods):
+        for method_idx, method in enumerate(methods):
+            start = time.time()
+            for i in range(iters):
                 W = Ws[method_idx]
-                if extra_dims == 0:
-                    if pcan_flag and method == 'pcan':
-                        labels = pcan.fit_predict(X[x])
-                    else:
-                        labels = spectral.fit_predict(W, labels_true=labels_true[x])
-                    temp_df.loc[i, method] = clustering_accuracy(Y[x], labels)
-                if extra_dims != 0:
-                    extra_dims = np.abs(extra_dims)
-                    max_acc = np.zeros(shape=(extra_dims,))
-                    for ed in range(extra_dims):
-                        if method == 'pcan':
-                            labels = pcan.fit_predict(X[x])
-                        else:
-                            labels = spectral.fit_predict(W, extra_dims=ed, labels_true=labels_true[x])
-                        max_acc[ed] = clustering_accuracy(Y[x], labels)
-                    temp_df.loc[i, method] = max_acc[0]
-                    temp_df_extra.loc[i, method] = max_acc.max()
-        if extra_dims != 0:
-            results.append((temp_df, temp_df_extra))
-        else:            
-            results.append((temp_df,))
-    return results
+                if pcan_flag and method == 'pcan':
+                    labels = pcan.fit_predict(X[x])
+                else:
+                    labels = spectral.fit_predict(W, labels_true=labels_true[x], extra_dims=extra_dims)
+                temp_df.loc[i, method] = clustering_accuracy(Y[x], labels)    
+            timings[x, method_idx] = time.time() - start
+        results.append((temp_df,))
+    return results, timings
 
 def bar_comparison(
     bars,
