@@ -8,6 +8,7 @@ from typing import Optional, Tuple, Union
 
 import scipy.sparse as sp
 from scipy.sparse.linalg import LinearOperator, aslinearoperator
+import hnswlib
 
 import numpy as np
 from scipy import sparse
@@ -103,7 +104,6 @@ def fully_connected(X, metric='euclidean', kernel='gaussian'):
     if kernel == 'gaussian':
         d = np.exp((-d*d)/np.quantile(d[d>0], 0.2)**2)
     return d
-    
 
 
 def epsilon_graph(X, eps, metric='euclidean', kernel='gaussian'):
@@ -114,57 +114,107 @@ def epsilon_graph(X, eps, metric='euclidean', kernel='gaussian'):
         d = np.exp((-d*d)/np.quantile(d[d>0], 0.2)**2)
     return d
 
-def can_row_weights_from_dists(d_i, k, eps=1e-12):
-    d = np.asarray(d_i, dtype=float)
-    idx = np.argsort(d)
-    d_sorted = d[idx]
+def can_row_weights_from_sorted_dists(d_sorted, eps=1e-12):
+    """
+    d_sorted: sorted distances to the first k+1 neighbours, shape (k+1,)
+    returns weights for the first k neighbours
+    """
+    d_sorted = np.asarray(d_sorted, dtype=np.float64)
+    d_k1 = d_sorted[-1]
+    d_k = d_sorted[:-1]
 
-    if k + 1 > d_sorted.size:
-        k = max(1, d_sorted.size - 1)
+    gaps = np.maximum(d_k1 - d_k, 0.0)
+    denom = gaps.sum() + eps
+    return gaps / denom
 
-    d_k1 = d_sorted[k]
-    d_k = d_sorted[:k]
+import numpy as np
+from scipy import sparse
 
-    gaps = d_k1 - d_k
-    denom = np.sum(gaps) + eps
-    w_k = gaps / denom
-    return idx[:k], w_k
+def adaptive_neighbour_graph_can(
+    X,
+    k=10,
+    symmetrise=True,
+    eps=1e-12,
+    M=16,
+    ef_construction=200,
+    ef_search=100,
+    num_threads=-1,
+    dtype=np.float32,
+):
 
-def adaptive_neighbour_graph_can(X, k=10, symmetrise=True):
-    X = np.asarray(X, dtype=float)
-    N = X.shape[0]
+    X = np.asarray(X, dtype=dtype, order="C")
+    N, dim = X.shape
 
-    XX = np.sum(X**2, axis=1, keepdims=True)
-    dists = XX + XX.T - 2 * X @ X.T
-    np.fill_diagonal(dists, np.inf)
+    if N <= 1:
+        return sparse.csr_matrix((N, N), dtype=dtype)
 
-    rows = []
-    cols = []
-    data = []
+    k_eff = min(k, N - 1)
+    q = min(k_eff + 2, N)
 
+    # Build HNSW index
+    index = hnswlib.Index(space="l2", dim=dim)
+    index.init_index(max_elements=N, ef_construction=ef_construction, M=M)
+    index.add_items(X, np.arange(N), num_threads=num_threads)
+    index.set_ef(max(ef_search, q))
+
+    # Query neighbours for all points
+    nn_ids, nn_dists = index.knn_query(X, k=q, num_threads=num_threads)
+
+    rows = np.repeat(np.arange(N, dtype=np.int32), k_eff)
+    cols = np.empty(N * k_eff, dtype=np.int32)
+    data = np.empty(N * k_eff, dtype=dtype)
+
+    ptr = 0
     for i in range(N):
-        neigh_idx = np.where(np.isfinite(dists[i]))[0]
-        d_i = dists[i, neigh_idx]
+        ids_i = nn_ids[i]
+        d_i = nn_dists[i]
 
-        local_idx, local_w = can_row_weights_from_dists(d_i, k=k)
+        # Drop self if present
+        keep = ids_i != i
+        ids_i = ids_i[keep]
+        d_i = d_i[keep]
 
-        c = neigh_idx[local_idx]    
-        rows.append(np.full(c.shape[0], i, dtype=np.int32))
-        cols.append(c.astype(np.int32))
-        data.append(local_w.astype(float))
+        m = min(k_eff + 1, ids_i.size)
+        if m <= 1:
+            continue
 
-    rows = np.concatenate(rows)
-    cols = np.concatenate(cols)
-    data = np.concatenate(data)
+        ids_i = ids_i[:m]
+        d_i = d_i[:m]
 
-    S = sparse.csr_matrix((data, (rows, cols)), shape=(N, N))
+        order = np.argsort(d_i)
+        ids_i = ids_i[order]
+        d_i = d_i[order]
+
+        if ids_i.size < k_eff + 1:
+            # Fall back if ANN returned too few usable neighbours
+            kk = ids_i.size - 1
+            if kk <= 0:
+                continue
+            w = can_row_weights_from_sorted_dists(d_i[:kk + 1], eps=eps)
+            cols[ptr:ptr + kk] = ids_i[:kk]
+            data[ptr:ptr + kk] = w.astype(dtype, copy=False)
+            ptr += kk
+        else:
+            w = can_row_weights_from_sorted_dists(d_i[:k_eff + 1], eps=eps)
+            cols[ptr:ptr + k_eff] = ids_i[:k_eff]
+            data[ptr:ptr + k_eff] = w.astype(dtype, copy=False)
+            ptr += k_eff
+
+    rows = rows[:ptr]
+    cols = cols[:ptr]
+    data = data[:ptr]
+
+    S = sparse.csr_matrix((data, (rows, cols)), shape=(N, N), dtype=dtype)
 
     if symmetrise:
         S = 0.5 * (S + S.T)
 
         row_sums = np.asarray(S.sum(axis=1)).ravel()
-        row_sums[row_sums == 0] = 1.0
-        S = S.multiply(1.0 / row_sums[:, None])
+        inv = np.zeros_like(row_sums, dtype=dtype)
+        mask = row_sums > 0
+        inv[mask] = 1.0 / row_sums[mask]
+
+        S = sparse.diags(inv) @ S
 
     return S
 
@@ -242,12 +292,14 @@ def compute_biclique_kr(
                 "from spectral_clustering.graphs.constructors."
             ) from e
 
-    # 1) Base sparse Gram/affinity matrix K
-    K = knn_graph_fn(X, k=k, symmetrise=symmetrise)
-    if not sp.isspmatrix_csr(K):
-        K = K.tocsr()
+    # # 1) Base sparse Gram/affinity matrix K
+    # K = knn_graph_fn(X, k=k, symmetrise=symmetrise)
+    # if not sp.isspmatrix_csr(K):
+    #     K = K.tocsr()
 
-    K = K.astype(dtype, copy=False)
+    # K = K.astype(dtype, copy=False)
+    
+    K = fully_connected(X)
 
     if zero_diagonal:
         K.setdiag(0.0)
@@ -294,7 +346,8 @@ def compute_biclique_kr(
         Kr = LinearOperator(shape=(n, n), matvec=_matvec, dtype=dtype)
 
     else:
-        Kr = K.toarray()
+        # Kr = K.toarray()
+        Kr = K
         if alpha != 0.0:
             Kr += alpha * (delta[:, None] + delta[None, :])
         if beta != 0.0 and rho != 0.0:
