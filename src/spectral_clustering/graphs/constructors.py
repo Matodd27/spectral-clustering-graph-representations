@@ -114,7 +114,7 @@ def epsilon_graph(X, eps, metric='euclidean', kernel='gaussian'):
         d = np.exp((-d*d)/np.quantile(d[d>0], 0.2)**2)
     return d
 
-def can_row_weights_from_sorted_dists(d_sorted, eps=1e-12):
+def can_row_weights_from_dists(d_sorted, eps=1e-12):
     """
     d_sorted: sorted distances to the first k+1 neighbours, shape (k+1,)
     returns weights for the first k neighbours
@@ -190,12 +190,12 @@ def adaptive_neighbour_graph_can(
             kk = ids_i.size - 1
             if kk <= 0:
                 continue
-            w = can_row_weights_from_sorted_dists(d_i[:kk + 1], eps=eps)
+            w = can_row_weights_from_dists(d_i[:kk + 1], eps=eps)
             cols[ptr:ptr + kk] = ids_i[:kk]
             data[ptr:ptr + kk] = w.astype(dtype, copy=False)
             ptr += kk
         else:
-            w = can_row_weights_from_sorted_dists(d_i[:k_eff + 1], eps=eps)
+            w = can_row_weights_from_dists(d_i[:k_eff + 1], eps=eps)
             cols[ptr:ptr + k_eff] = ids_i[:k_eff]
             data[ptr:ptr + k_eff] = w.astype(dtype, copy=False)
             ptr += k_eff
