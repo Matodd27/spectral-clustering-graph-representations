@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/1109417040.svg)](https://doi.org/10.5281/zenodo.19859397)
+
 # Graph Construction and Representation Learning for Spectral Clustering
 
 This repository contains the code and experimental material for my MMath project:
