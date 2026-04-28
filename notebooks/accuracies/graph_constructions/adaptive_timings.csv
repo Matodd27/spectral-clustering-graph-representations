@@ -1,0 +1,13 @@
+experiment,dataset,time
+adaptive,CIFAR_raw,5.292047047615052
+adaptive,CIFAR_vae,5.449869477748871
+adaptive,CIFAR_simclr,7.237480866909027
+adaptive,CIFAR_simclr_pca,2.088239812850952
+adaptive,FMNIST_raw,12.961776828765869
+adaptive,FMNIST_vae,7.611735010147095
+adaptive,FMNIST_simclr,3.084870433807373
+adaptive,FMNIST_simclr_pca,1.773763620853424
+adaptive,MNIST_raw,2.384220814704895
+adaptive,MNIST_vae,1.1488674402236938
+adaptive,MNIST_simclr,2.710218143463135
+adaptive,MNIST_simclr_pca,2.9275601625442507
