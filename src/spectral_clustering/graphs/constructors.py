@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import scipy.sparse as sp
+from scipy import sparse
 from scipy.sparse.linalg import LinearOperator, aslinearoperator
 import hnswlib
 
@@ -73,7 +74,7 @@ def knn_graph(X, k=10, kernel='gaussian', symmetrise=True, *, hnsw_M=16, hnsw_ef
     knn_dist = knn_dist[:, :k_eff]
 
     if k_eff == 0:
-        return sparse.csr_matrix((n, n))
+        return sp.csr_matrix((n, n))
 
     D = knn_dist * knn_dist 
     eps = D[:, k_eff - 1].copy()
@@ -89,7 +90,7 @@ def knn_graph(X, k=10, kernel='gaussian', symmetrise=True, *, hnsw_M=16, hnsw_ef
 
     self_ind = np.repeat(np.arange(n), k_eff)
 
-    W = sparse.coo_matrix((weights_f, (self_ind, knn_ind_f)), shape=(n, n)).tocsr()
+    W = sp.coo_matrix((weights_f, (self_ind, knn_ind_f)), shape=(n, n)).tocsr()
     W.setdiag(0)
     W.eliminate_zeros()
 
@@ -115,10 +116,6 @@ def epsilon_graph(X, eps, metric='euclidean', kernel='gaussian'):
     return d
 
 def can_row_weights_from_dists(d_sorted, eps=1e-12):
-    """
-    d_sorted: sorted distances to the first k+1 neighbours, shape (k+1,)
-    returns weights for the first k neighbours
-    """
     d_sorted = np.asarray(d_sorted, dtype=np.float64)
     d_k1 = d_sorted[-1]
     d_k = d_sorted[:-1]
@@ -126,9 +123,6 @@ def can_row_weights_from_dists(d_sorted, eps=1e-12):
     gaps = np.maximum(d_k1 - d_k, 0.0)
     denom = gaps.sum() + eps
     return gaps / denom
-
-import numpy as np
-from scipy import sparse
 
 def adaptive_neighbour_graph_can(
     X,
@@ -146,7 +140,7 @@ def adaptive_neighbour_graph_can(
     N, dim = X.shape
 
     if N <= 1:
-        return sparse.csr_matrix((N, N), dtype=dtype)
+        return sp.csr_matrix((N, N), dtype=dtype)
 
     k_eff = min(k, N - 1)
     q = min(k_eff + 2, N)
@@ -219,9 +213,6 @@ def adaptive_neighbour_graph_can(
     return S
 
 def laplacian_sparse(S: sparse.csr_matrix, kind: str = "symmetric") -> sparse.csr_matrix:
-    """
-    Build Laplacian from sparse affinity.
-    """
     S = S.tocsr()
     d = np.asarray(S.sum(axis=1)).ravel()
 
@@ -256,6 +247,83 @@ class BicliqueKR:
     rho: float
 
 
+def hnsw_knn_connectivity_graph(
+    X: np.ndarray,
+    k: int,
+    *,
+    symmetrise: bool = True,
+    metric: str = "l2",          # "l2", "cosine", or "ip"
+    ef_construction: int = 200,
+    M: int = 16,
+    ef: int | None = None,
+    num_threads: int = -1,
+    dtype: np.dtype = np.float64,
+):
+    """
+    Returns a sparse kNN graph with binary weights {0,1}, built using hnswlib.
+
+    Important:
+    - This returns a plain connectivity graph, NOT a Gaussian similarity graph.
+    - If symmetrise=True, uses union symmetrisation: G <- max(G, G.T).
+    """
+    import hnswlib
+
+    X = np.asarray(X, dtype=np.float32, order="C")
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2D, got shape {X.shape}")
+
+    n, d = X.shape
+    if not isinstance(k, int) or k <= 0:
+        raise ValueError(f"k must be a positive integer, got {k}")
+    if k >= n:
+        raise ValueError(f"k must be < n; got k={k}, n={n}")
+
+    index = hnswlib.Index(space=metric, dim=d)
+    index.init_index(
+        max_elements=n,
+        ef_construction=ef_construction,
+        M=M,
+    )
+    ids = np.arange(n)
+    index.add_items(X, ids, num_threads=num_threads)
+
+    # hnswlib recommends ef > k for query accuracy
+    ef = max(k + 1, 2 * k if ef is None else ef)
+    index.set_ef(ef)
+
+    # Query k+1 because self is usually returned as a neighbour
+    labels, _distances = index.knn_query(
+        X,
+        k=k + 1,
+        num_threads=num_threads,
+    )
+
+    rows = []
+    cols = []
+
+    for i in range(n):
+        nbrs = labels[i]
+        nbrs = nbrs[nbrs != i]   # drop self
+        nbrs = nbrs[:k]          # keep exactly k neighbours
+
+        if nbrs.shape[0] != k:
+            raise RuntimeError(
+                f"After removing self, row {i} has only {nbrs.shape[0]} neighbours; expected {k}."
+            )
+
+        rows.extend([i] * k)
+        cols.extend(nbrs.tolist())
+
+    data = np.ones(len(rows), dtype=dtype)
+    G = sp.csr_matrix((data, (rows, cols)), shape=(n, n), dtype=dtype)
+
+    if symmetrise:
+        G = G.maximum(G.T)
+
+    G.setdiag(0.0)
+    G.eliminate_zeros()
+    return G
+
 def compute_biclique_kr(
     X: np.ndarray,
     k: int = 10,
@@ -285,27 +353,23 @@ def compute_biclique_kr(
 
     if knn_graph_fn is None:
         try:
-            knn_graph_fn = knn_graph
+            knn_graph_fn = hnsw_knn_connectivity_graph
         except NameError as e:
             raise NameError(
                 "knn_graph is not defined. Pass knn_graph_fn=... or import knn_graph "
                 "from spectral_clustering.graphs.constructors."
             ) from e
 
-    # # 1) Base sparse Gram/affinity matrix K
-    # K = knn_graph_fn(X, k=k, symmetrise=symmetrise)
-    # if not sp.isspmatrix_csr(K):
-    #     K = K.tocsr()
+    K = knn_graph_fn(X, k=k, symmetrise=symmetrise)
+    if not sp.isspmatrix_csr(K):
+        K = K.tocsr()
 
-    # K = K.astype(dtype, copy=False)
-    
-    K = fully_connected(X)
+    K = K.astype(dtype, copy=False)
 
     if zero_diagonal:
         K.setdiag(0.0)
         K.eliminate_zeros()
 
-    # 2) Precompute delta and rho from base K
     ones = np.ones(n, dtype=dtype)
     delta = np.asarray(K @ ones).ravel()     # delta_i = sum_j K_ij
     rho = float(delta.sum())                # rho = sum_{i,j} K_ij
@@ -346,8 +410,7 @@ def compute_biclique_kr(
         Kr = LinearOperator(shape=(n, n), matvec=_matvec, dtype=dtype)
 
     else:
-        # Kr = K.toarray()
-        Kr = K
+        Kr = K.toarray()
         if alpha != 0.0:
             Kr += alpha * (delta[:, None] + delta[None, :])
         if beta != 0.0 and rho != 0.0:

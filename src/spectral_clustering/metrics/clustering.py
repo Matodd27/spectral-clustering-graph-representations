@@ -5,6 +5,7 @@ from sklearn.metrics import normalized_mutual_info_score
 from sklearn.metrics.cluster import contingency_matrix
 import scipy.sparse as sp
 import time
+from scipy import stats
 
 plt.rcParams.update({
     # --- Font ---
@@ -130,7 +131,6 @@ def silhouette_score(W, labels_):
     k = int(labels.max()) + 1
     sizes = np.bincount(labels, minlength=k).astype(np.int64)
 
-    # Helper to compute per-cluster means from sums, given denominators
     def _point_score_from_a_b(a, b):
         denom = np.maximum(a, b)
         s = np.zeros_like(a, dtype=float)
@@ -138,41 +138,30 @@ def silhouette_score(W, labels_):
         s[mask] = (a[mask] - b[mask]) / denom[mask]
         return s
 
-    # Detect sparse matrix without hard-requiring SciPy at import time
-    is_sparse = False
-    try:
-        import scipy.sparse as sp
-        is_sparse = sp.isspmatrix(W)
-    except Exception:
-        is_sparse = False
+    is_sparse = sp.isspmatrix(W)
 
     s = np.zeros(n, dtype=float)
 
     if not is_sparse:
-        # -------- Dense path --------
         W = np.asarray(W, dtype=float)
         if W.shape != (n, n):
             raise ValueError(f"Dense W must have shape {(n, n)}, got {W.shape}.")
 
         diag = np.diag(W)
 
-        # Precompute reciprocal sizes for other-cluster means
         inv_sizes = 1.0 / np.maximum(sizes, 1)
 
         for i in range(n):
-            # sums_c[c] = sum_j W[i, j] for j in cluster c  (O(n) in C via bincount)
             sums_c = np.bincount(labels, weights=W[i], minlength=k)
 
             ci = labels[i]
 
-            # a(i): exclude self, average over all other points in own cluster
             denom_a = sizes[ci] - 1
             if denom_a > 0:
                 a_i = (sums_c[ci] - diag[i]) / denom_a
             else:
-                a_i = 0.0  # singleton cluster
+                a_i = 0.0
 
-            # b(i): maximum mean similarity to other clusters (full cluster mean)
             means_c = sums_c * inv_sizes
             means_c[ci] = -np.inf
             b_i = float(means_c.max())
@@ -180,8 +169,6 @@ def silhouette_score(W, labels_):
             s[i] = _point_score_from_a_b(np.array([a_i]), np.array([b_i]))[0]
 
     else:
-        # -------- Sparse path (observed-edges-only averaging) --------
-        import scipy.sparse as sp
         W = W.tocsr()
         if W.shape != (n, n):
             raise ValueError(f"Sparse W must have shape {(n, n)}, got {W.shape}.")
@@ -202,26 +189,20 @@ def silhouette_score(W, labels_):
 
             lab_cols = labels[cols]
 
-            # sums_c[c] = sum over observed edges from i to cluster c
             sums_c = np.bincount(lab_cols, weights=vals, minlength=k)
-            # cnt_c[c] = number of observed edges from i to cluster c
             cnt_c = np.bincount(lab_cols, minlength=k)
 
-            # If self-edge exists, remove it (rare if you zeroed diagonal, but safe)
             self_mask = (cols == i)
             if np.any(self_mask):
                 self_w = float(vals[self_mask].sum())
                 sums_c[ci] -= self_w
                 cnt_c[ci] -= int(self_mask.sum())
 
-            # a(i): mean over observed within-cluster edges
             if sizes[ci] <= 1 or cnt_c[ci] <= 0:
                 a_i = 0.0
             else:
                 a_i = sums_c[ci] / cnt_c[ci]
 
-            # b(i): max mean over observed edges to other clusters
-            # clusters with cnt==0 contribute mean 0 (no observed evidence of similarity)
             means_c = np.zeros(k, dtype=float)
             nonzero = cnt_c > 0
             means_c[nonzero] = sums_c[nonzero] / cnt_c[nonzero]
@@ -230,12 +211,9 @@ def silhouette_score(W, labels_):
 
             s[i] = _point_score_from_a_b(np.array([a_i]), np.array([b_i]))[0]
 
-    # Per-cluster averages
     sum_s = np.bincount(labels, weights=s, minlength=k)
     out = {c: float(sum_s[c] / sizes[c]) for c in range(k) if sizes[c] > 0}
     return out
-
-from scipy import stats
 
 methods = ['knn', 'fc', 'adaptive', 'biclique', 'epsilon', 'PCAN']
 labels = ['kNN', 'FC', 'Adaptive', 'Biclique', r'$\epsilon$-graph', 'PCAN']
@@ -297,10 +275,10 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
     from spectral_clustering.graphs.constructors import knn_graph, fully_connected, adaptive_neighbour_graph_can, compute_biclique_kr, epsilon_graph
     
     methods_to_fn = {
-        'knn': lambda X: knn_graph(X, k=10),
+        'knn': lambda X: knn_graph(X, k=params['k']),
         'fc': lambda X: fully_connected(X),
-        'adaptive': lambda X: adaptive_neighbour_graph_can(X, k=10, symmetrise=True),
-        'biclique': lambda X: compute_biclique_kr(X, k=10, r=params['r'], symmetrise=True).Kr,
+        'adaptive': lambda X: adaptive_neighbour_graph_can(X, k=params['k'], symmetrise=True),
+        'biclique': lambda X: compute_biclique_kr(X, k=params['k'], r=params['r'], symmetrise=True).Kr,
         'epsilon': lambda X: epsilon_graph(X, epsilon=0.5, symmetrise=True),
     }
     
@@ -326,19 +304,20 @@ def run_iters(X, Y, methods=['knn', 'fc', 'adaptive', 'biclique', 'pcan'], param
 
         spectral = BaseSpectralClustering(n_clusters=k, kind=kind)
         temp_df = pd.DataFrame(columns=methods)
-        Ws = [methods_to_fn[m](X[x]) for m in methods if m != 'pcan']
         for method_idx, method in enumerate(methods):
-            start = time.time()
+            start = time.perf_counter()
             for i in range(iters):
                 if pcan_flag and method == 'pcan':
                     labels = pcan.fit_predict(X[x])
                 else:
-                    W = Ws[method_idx]
+                    W = methods_to_fn[method](X[x])
                     labels = spectral.fit_predict(W, labels_true=labels_true[x], extra_dims=extra_dims)
-                temp_df.loc[i, method] = clustering_accuracy(Y[x], labels)    
-            timings[x, method_idx] = time.time() - start
+                temp_acc = clustering_accuracy(Y[x], labels)
+                temp_df.loc[i, method] = temp_acc  
+            timings[x, method_idx] = (time.perf_counter() - start) / iters
         results.append((temp_df,))
     return results, timings
+
 
 def bar_comparison(
     bars,
@@ -660,7 +639,6 @@ def prepare_line_summary(
 
     summary_df = pd.DataFrame(rows)
 
-    # Try to convert x to numeric if possible, so epoch plots sort correctly
     summary_df[x_name] = pd.to_numeric(summary_df[x_name])
 
     return summary_df

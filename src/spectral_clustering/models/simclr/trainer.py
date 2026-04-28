@@ -10,7 +10,7 @@ from torchvision import datasets, transforms
 from torchvision.models import resnet18
 from torchvision.utils import make_grid, save_image
 
-from .simclr import ContrastiveTransformations, contrast_transforms, save_augmentation_preview, get_model, WarmupCosineScheduler, SimCLR, ntxent_loss
+from .FashionMNIST.FashionMNIST_simclr import ContrastiveTransformations, contrast_transforms, save_augmentation_preview, get_model, WarmupCosineScheduler, SimCLR, ntxent_loss
 
 DATASET_PATH = os.path.expanduser('~/scratch/data')
 root = os.path.expanduser('~/scratch/simclr_fashionmnist')
